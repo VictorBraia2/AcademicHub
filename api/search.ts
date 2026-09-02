@@ -5,24 +5,7 @@ import type {
   SearchFilters,
   SearchResponse,
 } from "../src/features/search/types";
-import { logger } from "../src/shared/utils/logger";
 
-// OpenAlex passou a exigir api_key a partir de 13/fev/2026 (antes bastava
-// mailto). Crossref e Unpaywall continuam usando apenas e-mail de contato.
-//
-// TODO/nota: pesquisei integrar SciELO diretamente (faria sentido, é a
-// principal base brasileira de periódicos). A API oficial deles
-// (articlemeta.scielo.org) só serve pra baixar registro que você já sabe o
-// ID/ISSN/coleção — não tem busca por palavra-chave. Existe um endpoint de
-// busca em search.scielo.org que o site usa internamente, mas o próprio
-// time da SciELO trata isso como uso interno, não uma API pública estável
-// (um script deles no GitHub literalmente comenta "a API é pra harvesting,
-// não pra query" e contorna isso raspando a busca do site). Não quis
-// depender de algo que pode quebrar sem aviso. Por ora, a cobertura
-// brasileira vem do OpenAlex (que indexa boa parte do SciELO via DOIs
-// registrados no Crossref) com a query extra abaixo filtrando por afiliação
-// de autor no Brasil. Se um dia a SciELO abrir uma busca oficial, vale
-// revisitar.
 const OPENALEX_API_KEY = process.env.OPENALEX_API_KEY ?? "";
 const CONTACT_EMAIL = process.env.ACADEMICHUB_CONTACT_EMAIL ?? "";
 const SEMANTIC_SCHOLAR_API_KEY = process.env.SEMANTIC_SCHOLAR_API_KEY ?? "";
@@ -42,10 +25,7 @@ async function fetchWithTimeout(url: string, init?: RequestInit): Promise<Respon
 
 function normalizeDoi(doi: string | null | undefined): string | null {
   if (!doi) return null;
-  // O Crossref às vezes devolve DOI como string vazia em vez de omitir o
-  // campo (aconteceu com alguns registros de capítulo de livro) — o !doi
-  // acima já cobre isso, mas deixando registrado porque não é óbvio olhando
-  // só a assinatura da função.
+
   return doi
     .trim()
     .toLowerCase()
@@ -53,10 +33,6 @@ function normalizeDoi(doi: string | null | undefined): string | null {
     .replace(/^doi:/, "");
 }
 
-// Mensagem de erro específica pra rate limit em vez de deixar virar só mais
-// um "Falha desconhecida" no card de resultados — 429 é a causa mais comum
-// de erro nesses provedores no uso real (principalmente Semantic Scholar
-// sem chave de API, que cai no pool anônimo de 100 req/5min).
 function describeProviderFailure(providerLabel: string, status: number): string {
   if (status === 429) return `${providerLabel} limitou as requisições (429) — tenta de novo em instantes.`;
   if (status >= 500) return `${providerLabel} está indisponível no momento (${status}).`;
@@ -77,8 +53,6 @@ function guessDocumentType(rawType: string | undefined | null): DocumentType {
   return "other";
 }
 
-// OpenAlex retorna o abstract como um índice invertido (economiza espaço),
-// então precisamos reconstruir o texto corrido a partir das posições.
 function reconstructAbstract(invertedIndex: Record<string, number[]> | undefined): string | null {
   if (!invertedIndex) return null;
   const wordPositions: [number, string][] = [];
@@ -90,12 +64,6 @@ function reconstructAbstract(invertedIndex: Record<string, number[]> | undefined
   return reconstructedText.length > 0 ? reconstructedText : null;
 }
 
-// Extraído pra função própria porque agora é chamado duas vezes: uma busca
-// geral e uma segunda, específica, filtrando por afiliação de autor no
-// Brasil (ver searchOpenAlex). O OpenAlex não deixa combinar OR entre
-// filtros de atributos diferentes numa única chamada (ex.: "idioma pt OU
-// autor no Brasil" dá erro 400), então duas chamadas é o jeito real de
-// fazer isso sem perder resultados.
 async function fetchOpenAlexWorks(filters: SearchFilters, extraFilterParts: string[]): Promise<any[]> {
   const openAlexParams = new URLSearchParams();
   openAlexParams.set("search", filters.query);
@@ -149,14 +117,6 @@ function mapOpenAlexWork(openAlexWork: any): AcademicSource {
 }
 
 async function searchOpenAlex(filters: SearchFilters): Promise<AcademicSource[]> {
-  // Busca geral + busca específica de produção com afiliação brasileira, em
-  // paralelo. A segunda garante que trabalho brasileiro apareça mesmo quando
-  // não ficaria bem ranqueado numa busca de relevância genérica — é o que o
-  // Victor pediu como prioridade ("principalmente artigos... brasileiros").
-  //
-  // Uso allSettled em vez de Promise.all de propósito: se só a chamada
-  // "Brasil" falhar (ex.: instabilidade pontual do filtro), ainda quero
-  // devolver a busca geral em vez de derrubar o provedor OpenAlex inteiro.
   const [generalResult, brazilianResult] = await Promise.allSettled([
     fetchOpenAlexWorks(filters, []),
     fetchOpenAlexWorks(filters, ["authorships.countries:BR"]),
@@ -169,7 +129,7 @@ async function searchOpenAlex(filters: SearchFilters): Promise<AcademicSource[]>
   const generalWorks = generalResult.status === "fulfilled" ? generalResult.value : [];
   const brazilianWorks = brazilianResult.status === "fulfilled" ? brazilianResult.value : [];
   if (brazilianResult.status === "rejected") {
-    logger.warn("Busca OpenAlex específica de afiliação brasileira falhou; seguindo só com a geral", {
+    console.warn("Busca OpenAlex específica de afiliação brasileira falhou; seguindo só com a geral:", {
       error: brazilianResult.reason?.message ?? String(brazilianResult.reason),
     });
   }
@@ -220,11 +180,6 @@ async function searchCrossref(filters: SearchFilters): Promise<AcademicSource[]>
 }
 
 async function searchSemanticScholar(filters: SearchFilters): Promise<AcademicSource[]> {
-  // Sem SEMANTIC_SCHOLAR_API_KEY isso cai no pool anônimo (100 req/5min por
-  // IP, que no caso do Vercel é compartilhado entre várias execuções da
-  // função) — o 429 aparece com mais frequência do que os outros provedores
-  // nesse cenário. Não implementei retry/backoff; por ora só devolve o erro
-  // pro card do provedor específico sem derrubar os outros três.
   const semanticScholarParams = new URLSearchParams();
   semanticScholarParams.set("query", filters.query);
   semanticScholarParams.set("limit", "15");
@@ -270,9 +225,7 @@ async function searchGoogleBooks(filters: SearchFilters): Promise<AcademicSource
   const googleBooksParams = new URLSearchParams();
   googleBooksParams.set("q", filters.query);
   googleBooksParams.set("maxResults", "10");
-  // Região BR: afeta qual link de compra/disponibilidade a API devolve
-  // (preço e "for sale" variam por país). Sem isso, às vezes vinha link
-  // pra loja americana pra um livro que só vende no Brasil.
+
   googleBooksParams.set("country", "BR");
   if (GOOGLE_BOOKS_API_KEY) googleBooksParams.set("key", GOOGLE_BOOKS_API_KEY);
 
@@ -310,9 +263,6 @@ async function searchGoogleBooks(filters: SearchFilters): Promise<AcademicSource
   });
 }
 
-// Enriquecimento: Unpaywall preenche o link de PDF aberto quando os outros
-// provedores só sinalizaram "unknown" mas o item tem DOI. Limitado às
-// primeiras posições do resultado combinado para não estourar a latência.
 async function enrichWithUnpaywall(academicSources: AcademicSource[]): Promise<void> {
   const contactEmail = process.env.UNPAYWALL_EMAIL ?? CONTACT_EMAIL;
   if (!contactEmail) return;
@@ -341,10 +291,7 @@ async function enrichWithUnpaywall(academicSources: AcademicSource[]): Promise<v
             (academicSource.doi ? `https://doi.org/${academicSource.doi}` : null);
         }
       } catch (err) {
-        // Falha isolada de enriquecimento não deve derrubar a busca inteira,
-        // mas vale saber que aconteceu (senão parece só que o Unpaywall
-        // "não sabia" o status de acesso, quando na real a chamada falhou).
-        logger.warn("Falha ao enriquecer fonte via Unpaywall", {
+        console.warn("Falha ao enriquecer fonte via Unpaywall:", {
           doi: academicSource.doi,
           error: err instanceof Error ? err.message : String(err),
         });
@@ -353,8 +300,6 @@ async function enrichWithUnpaywall(academicSources: AcademicSource[]): Promise<v
   );
 }
 
-// Deduplicação — DOI é a chave primária universal; sem DOI, cai para
-// título normalizado + ano como chave de fallback.
 function dedupeByDoi(academicSources: AcademicSource[]): AcademicSource[] {
   const sourcesByDedupeKey = new Map<string, AcademicSource>();
 
@@ -368,8 +313,6 @@ function dedupeByDoi(academicSources: AcademicSource[]): AcademicSource[] {
       sourcesByDedupeKey.set(dedupeKey, academicSource);
       continue;
     }
-    // Mantém o registro mais completo: prioriza quem já tem abstract e
-    // contagem de citações, e mescla o link de acesso aberto se só um lado tiver.
     const mergedSource: AcademicSource = {
       ...existingSource,
       abstract: existingSource.abstract ?? academicSource.abstract,
@@ -404,9 +347,6 @@ function applyFilters(academicSources: AcademicSource[], filters: SearchFilters)
 
 type ProviderName = AcademicSource["sourceProvider"];
 
-// Mesmo mínimo do useSearch no frontend — mas isso aqui é a validação que
-// realmente importa, já que o endpoint pode ser chamado direto (curl,
-// outro cliente, um bookmark velho) sem passar pela tela de busca.
 const MIN_QUERY_LENGTH = 2;
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -458,7 +398,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       } else {
         const failureMessage = providerResult.reason?.message ?? "Falha desconhecida";
         providerErrors[providerName] = failureMessage;
-        logger.warn("Provedor de busca acadêmica falhou", { provider: providerName, query, failureMessage });
+        console.warn("Provedor de busca acadêmica falhou:", { provider: providerName, query, failureMessage });
       }
     });
 
@@ -466,11 +406,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     await enrichWithUnpaywall(mergedSources);
     mergedSources = applyFilters(mergedSources, filters);
 
-    // Prioridade agora é conteúdo em português primeiro (Victor pediu foco
-    // em produção brasileira), depois acesso aberto, depois citações. Não
-    // uso "país do autor" aqui pro ranking porque esse dado não sobrevive à
-    // deduplicação por DOI direito (fica só no registro que "ganhou" o
-    // merge) — idioma é o sinal que temos com mais confiança em todo item.
     mergedSources.sort((sourceA, sourceB) => {
       const brazilScore = (academicSource: AcademicSource) => (academicSource.language === "pt" ? 1 : 0);
       const brazilDiff = brazilScore(sourceB) - brazilScore(sourceA);
@@ -484,12 +419,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return (sourceB.citationCount ?? 0) - (sourceA.citationCount ?? 0);
     });
 
-    // TODO: sem paginação — corta em 40 e pronto, não tem "carregar mais".
-    // Nos termos que testei (geopolítica de semicondutores, visão
-    // computacional adversarial) isso raramente é atingido, mas um termo
-    // muito genérico vai perder resultado silenciosamente. Se isso virar
-    // reclamação, implementar cursor por provedor em vez de paginação
-    // "global" (cada API pagina diferente, vai dar trabalho).
     const searchResponse: SearchResponse = {
       results: mergedSources.slice(0, 40),
       totalEstimate: mergedSources.length,
@@ -499,10 +428,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     res.setHeader("Cache-Control", "s-maxage=300, stale-while-revalidate=600");
     res.status(200).json(searchResponse);
   } catch (err) {
-    // Isso só dispara se algo além das falhas por provedor (já tratadas
-    // acima) quebrar — ex.: bug na deduplicação ou no enriquecimento do
-    // Unpaywall. Sem esse catch, virava um 500 sem corpo nenhum pro cliente.
-    logger.error("Falha inesperada no handler de busca", {
+    console.error("Falha inesperada no handler de busca:", {
       query,
       error: err instanceof Error ? err.message : String(err),
     });
