@@ -1,0 +1,447 @@
+import type { VercelRequest, VercelResponse } from "@vercel/node";
+import type {
+  AcademicSource,
+  DocumentType,
+  SearchFilters,
+  SearchResponse,
+} from "../src/features/search/types";
+import { logger } from "../src/shared/utils/logger";
+
+// OpenAlex passou a exigir api_key a partir de 13/fev/2026 (antes bastava
+// mailto). Crossref e Unpaywall continuam usando apenas e-mail de contato.
+const OPENALEX_API_KEY = process.env.OPENALEX_API_KEY ?? "";
+const CONTACT_EMAIL = process.env.ACADEMICHUB_CONTACT_EMAIL ?? "";
+const SEMANTIC_SCHOLAR_API_KEY = process.env.SEMANTIC_SCHOLAR_API_KEY ?? "";
+const GOOGLE_BOOKS_API_KEY = process.env.GOOGLE_BOOKS_API_KEY ?? "";
+
+const FETCH_TIMEOUT_MS = 8000;
+
+async function fetchWithTimeout(url: string, init?: RequestInit): Promise<Response> {
+  const abortController = new AbortController();
+  const timeoutHandle = setTimeout(() => abortController.abort(), FETCH_TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...init, signal: abortController.signal });
+  } finally {
+    clearTimeout(timeoutHandle);
+  }
+}
+
+function normalizeDoi(doi: string | null | undefined): string | null {
+  if (!doi) return null;
+  // O Crossref às vezes devolve DOI como string vazia em vez de omitir o
+  // campo (aconteceu com alguns registros de capítulo de livro) — o !doi
+  // acima já cobre isso, mas deixando registrado porque não é óbvio olhando
+  // só a assinatura da função.
+  return doi
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\/(dx\.)?doi\.org\//, "")
+    .replace(/^doi:/, "");
+}
+
+// Mensagem de erro específica pra rate limit em vez de deixar virar só mais
+// um "Falha desconhecida" no card de resultados — 429 é a causa mais comum
+// de erro nesses provedores no uso real (principalmente Semantic Scholar
+// sem chave de API, que cai no pool anônimo de 100 req/5min).
+function describeProviderFailure(providerLabel: string, status: number): string {
+  if (status === 429) return `${providerLabel} limitou as requisições (429) — tenta de novo em instantes.`;
+  if (status >= 500) return `${providerLabel} está indisponível no momento (${status}).`;
+  return `${providerLabel} respondeu ${status}.`;
+}
+
+function guessDocumentType(rawType: string | undefined | null): DocumentType {
+  const normalizedType = (rawType ?? "").toLowerCase();
+  if (normalizedType.includes("book") && !normalizedType.includes("chapter")) return "book";
+  if (normalizedType.includes("chapter")) return "chapter";
+  if (normalizedType.includes("thesis") || normalizedType.includes("dissertation")) return "thesis";
+  if (
+    normalizedType.includes("article") ||
+    normalizedType.includes("journal") ||
+    normalizedType.includes("proceedings")
+  )
+    return "article";
+  return "other";
+}
+
+// OpenAlex retorna o abstract como um índice invertido (economiza espaço),
+// então precisamos reconstruir o texto corrido a partir das posições.
+function reconstructAbstract(invertedIndex: Record<string, number[]> | undefined): string | null {
+  if (!invertedIndex) return null;
+  const wordPositions: [number, string][] = [];
+  for (const [word, positions] of Object.entries(invertedIndex)) {
+    for (const position of positions) wordPositions.push([position, word]);
+  }
+  wordPositions.sort((positionA, positionB) => positionA[0] - positionB[0]);
+  const reconstructedText = wordPositions.map(([, word]) => word).join(" ");
+  return reconstructedText.length > 0 ? reconstructedText : null;
+}
+
+async function searchOpenAlex(filters: SearchFilters): Promise<AcademicSource[]> {
+  const openAlexParams = new URLSearchParams();
+  openAlexParams.set("search", filters.query);
+  openAlexParams.set("per_page", "15");
+  if (OPENALEX_API_KEY) openAlexParams.set("api_key", OPENALEX_API_KEY);
+  if (CONTACT_EMAIL) openAlexParams.set("mailto", CONTACT_EMAIL);
+
+  const dateFilterParts: string[] = [];
+  if (filters.yearFrom) dateFilterParts.push(`from_publication_date:${filters.yearFrom}-01-01`);
+  if (filters.yearTo) dateFilterParts.push(`to_publication_date:${filters.yearTo}-12-31`);
+  if (dateFilterParts.length) openAlexParams.set("filter", dateFilterParts.join(","));
+
+  const openAlexResponse = await fetchWithTimeout(
+    `https://api.openalex.org/works?${openAlexParams.toString()}`
+  );
+  if (!openAlexResponse.ok) throw new Error(describeProviderFailure("OpenAlex", openAlexResponse.status));
+  const openAlexPayload = await openAlexResponse.json();
+
+  return (openAlexPayload.results ?? []).map((openAlexWork: any): AcademicSource => {
+    const doi = normalizeDoi(openAlexWork.doi);
+    const openAccessPdfUrl: string | null =
+      openAlexWork.open_access?.oa_url ??
+      openAlexWork.best_oa_location?.pdf_url ??
+      openAlexWork.primary_location?.pdf_url ??
+      null;
+    return {
+      id: doi ? `doi:${doi}` : `openalex:${openAlexWork.id}`,
+      title: openAlexWork.title ?? openAlexWork.display_name ?? "Sem título",
+      authors: (openAlexWork.authorships ?? []).map((authorship: any) => ({
+        name: authorship.author?.display_name ?? "Autor desconhecido",
+      })),
+      year: openAlexWork.publication_year ?? null,
+      venue:
+        openAlexWork.primary_location?.source?.display_name ?? openAlexWork.host_venue?.display_name ?? null,
+      documentType: guessDocumentType(openAlexWork.type),
+      abstract: reconstructAbstract(openAlexWork.abstract_inverted_index),
+      doi,
+      citationCount: openAlexWork.cited_by_count ?? null,
+      language: openAlexWork.language ?? null,
+      sourceProvider: "openalex",
+      access: {
+        status: openAlexWork.open_access?.is_oa ? "open" : openAccessPdfUrl ? "open" : "unknown",
+        openAccessPdfUrl,
+        purchaseUrl: null,
+      },
+    };
+  });
+}
+
+async function searchCrossref(filters: SearchFilters): Promise<AcademicSource[]> {
+  const crossrefParams = new URLSearchParams();
+  crossrefParams.set("query", filters.query);
+  crossrefParams.set("rows", "15");
+  if (CONTACT_EMAIL) crossrefParams.set("mailto", CONTACT_EMAIL);
+
+  const crossrefResponse = await fetchWithTimeout(
+    `https://api.crossref.org/works?${crossrefParams.toString()}`,
+    {
+      headers: CONTACT_EMAIL ? { "User-Agent": `AcademicHub/1.0 (mailto:${CONTACT_EMAIL})` } : undefined,
+    }
+  );
+  if (!crossrefResponse.ok) throw new Error(describeProviderFailure("Crossref", crossrefResponse.status));
+  const crossrefPayload = await crossrefResponse.json();
+
+  return (crossrefPayload.message?.items ?? []).map((crossrefItem: any): AcademicSource => {
+    const doi = normalizeDoi(crossrefItem.DOI);
+    const publicationYear =
+      crossrefItem.published?.["date-parts"]?.[0]?.[0] ??
+      crossrefItem["published-print"]?.["date-parts"]?.[0]?.[0] ??
+      null;
+    return {
+      id: doi ? `doi:${doi}` : `crossref:${crossrefItem.DOI ?? Math.random()}`,
+      title: Array.isArray(crossrefItem.title) ? (crossrefItem.title[0] ?? "Sem título") : "Sem título",
+      authors: (crossrefItem.author ?? []).map((crossrefAuthor: any) => ({
+        name: [crossrefAuthor.given, crossrefAuthor.family].filter(Boolean).join(" ") || "Autor desconhecido",
+      })),
+      year: publicationYear,
+      venue: Array.isArray(crossrefItem["container-title"])
+        ? (crossrefItem["container-title"][0] ?? null)
+        : null,
+      documentType: guessDocumentType(crossrefItem.type),
+      abstract: crossrefItem.abstract ? String(crossrefItem.abstract).replace(/<\/?jats:[^>]+>/g, "") : null,
+      doi,
+      citationCount: crossrefItem["is-referenced-by-count"] ?? null,
+      language: crossrefItem.language ?? null,
+      sourceProvider: "crossref",
+      access: { status: "unknown", openAccessPdfUrl: null, purchaseUrl: crossrefItem.URL ?? null },
+    };
+  });
+}
+
+async function searchSemanticScholar(filters: SearchFilters): Promise<AcademicSource[]> {
+  // Sem SEMANTIC_SCHOLAR_API_KEY isso cai no pool anônimo (100 req/5min por
+  // IP, que no caso do Vercel é compartilhado entre várias execuções da
+  // função) — o 429 aparece com mais frequência do que os outros provedores
+  // nesse cenário. Não implementei retry/backoff; por ora só devolve o erro
+  // pro card do provedor específico sem derrubar os outros três.
+  const semanticScholarParams = new URLSearchParams();
+  semanticScholarParams.set("query", filters.query);
+  semanticScholarParams.set("limit", "15");
+  semanticScholarParams.set(
+    "fields",
+    "title,abstract,year,authors,venue,externalIds,openAccessPdf,citationCount,publicationTypes"
+  );
+
+  const semanticScholarResponse = await fetchWithTimeout(
+    `https://api.semanticscholar.org/graph/v1/paper/search?${semanticScholarParams.toString()}`,
+    { headers: SEMANTIC_SCHOLAR_API_KEY ? { "x-api-key": SEMANTIC_SCHOLAR_API_KEY } : undefined }
+  );
+  if (!semanticScholarResponse.ok)
+    throw new Error(describeProviderFailure("Semantic Scholar", semanticScholarResponse.status));
+  const semanticScholarPayload = await semanticScholarResponse.json();
+
+  return (semanticScholarPayload.data ?? []).map((semanticScholarPaper: any): AcademicSource => {
+    const doi = normalizeDoi(semanticScholarPaper.externalIds?.DOI);
+    return {
+      id: doi ? `doi:${doi}` : `s2:${semanticScholarPaper.paperId}`,
+      title: semanticScholarPaper.title ?? "Sem título",
+      authors: (semanticScholarPaper.authors ?? []).map((paperAuthor: any) => ({
+        name: paperAuthor.name ?? "Autor desconhecido",
+      })),
+      year: semanticScholarPaper.year ?? null,
+      venue: semanticScholarPaper.venue || null,
+      documentType: guessDocumentType((semanticScholarPaper.publicationTypes ?? []).join(" ")),
+      abstract: semanticScholarPaper.abstract ?? null,
+      doi,
+      citationCount: semanticScholarPaper.citationCount ?? null,
+      language: null,
+      sourceProvider: "semantic_scholar",
+      access: {
+        status: semanticScholarPaper.openAccessPdf?.url ? "open" : "unknown",
+        openAccessPdfUrl: semanticScholarPaper.openAccessPdf?.url ?? null,
+        purchaseUrl: null,
+      },
+    };
+  });
+}
+
+async function searchGoogleBooks(filters: SearchFilters): Promise<AcademicSource[]> {
+  const googleBooksParams = new URLSearchParams();
+  googleBooksParams.set("q", filters.query);
+  googleBooksParams.set("maxResults", "10");
+  if (GOOGLE_BOOKS_API_KEY) googleBooksParams.set("key", GOOGLE_BOOKS_API_KEY);
+
+  const googleBooksResponse = await fetchWithTimeout(
+    `https://www.googleapis.com/books/v1/volumes?${googleBooksParams.toString()}`
+  );
+  if (!googleBooksResponse.ok)
+    throw new Error(describeProviderFailure("Google Books", googleBooksResponse.status));
+  const googleBooksPayload = await googleBooksResponse.json();
+
+  return (googleBooksPayload.items ?? []).map((googleBooksVolume: any): AcademicSource => {
+    const volumeInfo = googleBooksVolume.volumeInfo ?? {};
+    const saleInfo = googleBooksVolume.saleInfo ?? {};
+    const bookAccessInfo = googleBooksVolume.accessInfo ?? {};
+    const isFreeEbook = bookAccessInfo.epub?.isAvailable && saleInfo.saleability === "FREE";
+    return {
+      id: `gbooks:${googleBooksVolume.id}`,
+      title: volumeInfo.title ?? "Sem título",
+      authors: (volumeInfo.authors ?? []).map((authorName: string) => ({ name: authorName })),
+      year: volumeInfo.publishedDate ? Number(String(volumeInfo.publishedDate).slice(0, 4)) || null : null,
+      venue: volumeInfo.publisher ?? null,
+      documentType: "book",
+      abstract: volumeInfo.description ?? null,
+      doi: null,
+      citationCount: null,
+      language: volumeInfo.language ?? null,
+      sourceProvider: "google_books",
+      access: {
+        status: isFreeEbook ? "open" : saleInfo.saleability === "FOR_SALE" ? "paywalled" : "unknown",
+        openAccessPdfUrl: isFreeEbook ? (bookAccessInfo.webReaderLink ?? null) : null,
+        purchaseUrl:
+          saleInfo.saleability === "FOR_SALE" ? (saleInfo.buyLink ?? null) : (volumeInfo.infoLink ?? null),
+      },
+    };
+  });
+}
+
+// Enriquecimento: Unpaywall preenche o link de PDF aberto quando os outros
+// provedores só sinalizaram "unknown" mas o item tem DOI. Limitado às
+// primeiras posições do resultado combinado para não estourar a latência.
+async function enrichWithUnpaywall(academicSources: AcademicSource[]): Promise<void> {
+  const contactEmail = process.env.UNPAYWALL_EMAIL ?? CONTACT_EMAIL;
+  if (!contactEmail) return;
+
+  const unpaywallCandidates = academicSources
+    .filter((academicSource) => academicSource.doi && academicSource.access.status === "unknown")
+    .slice(0, 10);
+
+  await Promise.all(
+    unpaywallCandidates.map(async (academicSource) => {
+      try {
+        const unpaywallResponse = await fetchWithTimeout(
+          `https://api.unpaywall.org/v2/${encodeURIComponent(academicSource.doi!)}?email=${encodeURIComponent(contactEmail)}`
+        );
+        if (!unpaywallResponse.ok) return;
+        const unpaywallPayload = await unpaywallResponse.json();
+        const bestOpenAccessUrl: string | null =
+          unpaywallPayload.best_oa_location?.url_for_pdf ?? unpaywallPayload.best_oa_location?.url ?? null;
+        if (unpaywallPayload.is_oa && bestOpenAccessUrl) {
+          academicSource.access.status = "open";
+          academicSource.access.openAccessPdfUrl = bestOpenAccessUrl;
+        } else if (academicSource.access.status === "unknown") {
+          academicSource.access.status = "paywalled";
+          academicSource.access.purchaseUrl =
+            academicSource.access.purchaseUrl ??
+            (academicSource.doi ? `https://doi.org/${academicSource.doi}` : null);
+        }
+      } catch (err) {
+        // Falha isolada de enriquecimento não deve derrubar a busca inteira,
+        // mas vale saber que aconteceu (senão parece só que o Unpaywall
+        // "não sabia" o status de acesso, quando na real a chamada falhou).
+        logger.warn("Falha ao enriquecer fonte via Unpaywall", {
+          doi: academicSource.doi,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    })
+  );
+}
+
+// Deduplicação — DOI é a chave primária universal; sem DOI, cai para
+// título normalizado + ano como chave de fallback.
+function dedupeByDoi(academicSources: AcademicSource[]): AcademicSource[] {
+  const sourcesByDedupeKey = new Map<string, AcademicSource>();
+
+  for (const academicSource of academicSources) {
+    const dedupeKey = academicSource.doi
+      ? `doi:${academicSource.doi}`
+      : `title:${academicSource.title.trim().toLowerCase().replace(/\s+/g, " ")}:${academicSource.year ?? ""}`;
+
+    const existingSource = sourcesByDedupeKey.get(dedupeKey);
+    if (!existingSource) {
+      sourcesByDedupeKey.set(dedupeKey, academicSource);
+      continue;
+    }
+    // Mantém o registro mais completo: prioriza quem já tem abstract e
+    // contagem de citações, e mescla o link de acesso aberto se só um lado tiver.
+    const mergedSource: AcademicSource = {
+      ...existingSource,
+      abstract: existingSource.abstract ?? academicSource.abstract,
+      citationCount: existingSource.citationCount ?? academicSource.citationCount,
+      venue: existingSource.venue ?? academicSource.venue,
+      access: {
+        status:
+          existingSource.access.status !== "unknown"
+            ? existingSource.access.status
+            : academicSource.access.status,
+        openAccessPdfUrl: existingSource.access.openAccessPdfUrl ?? academicSource.access.openAccessPdfUrl,
+        purchaseUrl: existingSource.access.purchaseUrl ?? academicSource.access.purchaseUrl,
+      },
+    };
+    sourcesByDedupeKey.set(dedupeKey, mergedSource);
+  }
+
+  return Array.from(sourcesByDedupeKey.values());
+}
+
+function applyFilters(academicSources: AcademicSource[], filters: SearchFilters): AcademicSource[] {
+  return academicSources.filter((academicSource) => {
+    if (filters.yearFrom && academicSource.year && academicSource.year < filters.yearFrom) return false;
+    if (filters.yearTo && academicSource.year && academicSource.year > filters.yearTo) return false;
+    if (filters.documentType && academicSource.documentType !== filters.documentType) return false;
+    if (filters.language && academicSource.language && academicSource.language !== filters.language)
+      return false;
+    if (filters.accessOnly === "open" && academicSource.access.status !== "open") return false;
+    return true;
+  });
+}
+
+type ProviderName = AcademicSource["sourceProvider"];
+
+// Mesmo mínimo do useSearch no frontend — mas isso aqui é a validação que
+// realmente importa, já que o endpoint pode ser chamado direto (curl,
+// outro cliente, um bookmark velho) sem passar pela tela de busca.
+const MIN_QUERY_LENGTH = 2;
+
+export default async function handler(req: VercelRequest, res: VercelResponse) {
+  const query = String(req.query.query ?? "").trim();
+  if (query.length < MIN_QUERY_LENGTH) {
+    res
+      .status(400)
+      .json({ error: `Parâmetro 'query' precisa ter pelo menos ${MIN_QUERY_LENGTH} caracteres.` });
+    return;
+  }
+
+  const parsedYearFrom = req.query.yearFrom ? Number(req.query.yearFrom) : undefined;
+  const parsedYearTo = req.query.yearTo ? Number(req.query.yearTo) : undefined;
+  if (
+    (parsedYearFrom !== undefined && Number.isNaN(parsedYearFrom)) ||
+    (parsedYearTo !== undefined && Number.isNaN(parsedYearTo))
+  ) {
+    res.status(400).json({ error: "'yearFrom' e 'yearTo' precisam ser números." });
+    return;
+  }
+
+  const filters: SearchFilters = {
+    query,
+    yearFrom: parsedYearFrom,
+    yearTo: parsedYearTo,
+    documentType: (req.query.documentType as SearchFilters["documentType"]) || undefined,
+    language: (req.query.language as string) || undefined,
+    accessOnly: (req.query.accessOnly as SearchFilters["accessOnly"]) || undefined,
+  };
+
+  try {
+    const providers: Array<[ProviderName, () => Promise<AcademicSource[]>]> = [
+      ["openalex", () => searchOpenAlex(filters)],
+      ["crossref", () => searchCrossref(filters)],
+      ["semantic_scholar", () => searchSemanticScholar(filters)],
+      ["google_books", () => searchGoogleBooks(filters)],
+    ];
+
+    const providerErrors: SearchResponse["providerErrors"] = {};
+    const providerResults = await Promise.allSettled(
+      providers.map(([, runProviderSearch]) => runProviderSearch())
+    );
+
+    let mergedSources: AcademicSource[] = [];
+    providerResults.forEach((providerResult, providerIndex) => {
+      const [providerName] = providers[providerIndex];
+      if (providerResult.status === "fulfilled") {
+        mergedSources = mergedSources.concat(providerResult.value);
+      } else {
+        const failureMessage = providerResult.reason?.message ?? "Falha desconhecida";
+        providerErrors[providerName] = failureMessage;
+        logger.warn("Provedor de busca acadêmica falhou", { provider: providerName, query, failureMessage });
+      }
+    });
+
+    mergedSources = dedupeByDoi(mergedSources);
+    await enrichWithUnpaywall(mergedSources);
+    mergedSources = applyFilters(mergedSources, filters);
+
+    // Resultados com mais citações e com PDF aberto disponível sobem no ranking —
+    // relevância bibliométrica + facilidade de acesso imediato.
+    mergedSources.sort((sourceA, sourceB) => {
+      const accessScore = (academicSource: AcademicSource) =>
+        academicSource.access.status === "open" ? 1 : 0;
+      const accessDiff = accessScore(sourceB) - accessScore(sourceA);
+      if (accessDiff !== 0) return accessDiff;
+      return (sourceB.citationCount ?? 0) - (sourceA.citationCount ?? 0);
+    });
+
+    // TODO: sem paginação — corta em 40 e pronto, não tem "carregar mais".
+    // Nos termos que testei (geopolítica de semicondutores, visão
+    // computacional adversarial) isso raramente é atingido, mas um termo
+    // muito genérico vai perder resultado silenciosamente. Se isso virar
+    // reclamação, implementar cursor por provedor em vez de paginação
+    // "global" (cada API pagina diferente, vai dar trabalho).
+    const searchResponse: SearchResponse = {
+      results: mergedSources.slice(0, 40),
+      totalEstimate: mergedSources.length,
+      providerErrors,
+    };
+
+    res.setHeader("Cache-Control", "s-maxage=300, stale-while-revalidate=600");
+    res.status(200).json(searchResponse);
+  } catch (err) {
+    // Isso só dispara se algo além das falhas por provedor (já tratadas
+    // acima) quebrar — ex.: bug na deduplicação ou no enriquecimento do
+    // Unpaywall. Sem esse catch, virava um 500 sem corpo nenhum pro cliente.
+    logger.error("Falha inesperada no handler de busca", {
+      query,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    res.status(500).json({ error: "Erro inesperado ao processar a busca. Tenta de novo em instantes." });
+  }
+}
