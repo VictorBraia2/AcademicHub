@@ -9,6 +9,20 @@ import { logger } from "../src/shared/utils/logger";
 
 // OpenAlex passou a exigir api_key a partir de 13/fev/2026 (antes bastava
 // mailto). Crossref e Unpaywall continuam usando apenas e-mail de contato.
+//
+// TODO/nota: pesquisei integrar SciELO diretamente (faria sentido, é a
+// principal base brasileira de periódicos). A API oficial deles
+// (articlemeta.scielo.org) só serve pra baixar registro que você já sabe o
+// ID/ISSN/coleção — não tem busca por palavra-chave. Existe um endpoint de
+// busca em search.scielo.org que o site usa internamente, mas o próprio
+// time da SciELO trata isso como uso interno, não uma API pública estável
+// (um script deles no GitHub literalmente comenta "a API é pra harvesting,
+// não pra query" e contorna isso raspando a busca do site). Não quis
+// depender de algo que pode quebrar sem aviso. Por ora, a cobertura
+// brasileira vem do OpenAlex (que indexa boa parte do SciELO via DOIs
+// registrados no Crossref) com a query extra abaixo filtrando por afiliação
+// de autor no Brasil. Se um dia a SciELO abrir uma busca oficial, vale
+// revisitar.
 const OPENALEX_API_KEY = process.env.OPENALEX_API_KEY ?? "";
 const CONTACT_EMAIL = process.env.ACADEMICHUB_CONTACT_EMAIL ?? "";
 const SEMANTIC_SCHOLAR_API_KEY = process.env.SEMANTIC_SCHOLAR_API_KEY ?? "";
@@ -76,7 +90,13 @@ function reconstructAbstract(invertedIndex: Record<string, number[]> | undefined
   return reconstructedText.length > 0 ? reconstructedText : null;
 }
 
-async function searchOpenAlex(filters: SearchFilters): Promise<AcademicSource[]> {
+// Extraído pra função própria porque agora é chamado duas vezes: uma busca
+// geral e uma segunda, específica, filtrando por afiliação de autor no
+// Brasil (ver searchOpenAlex). O OpenAlex não deixa combinar OR entre
+// filtros de atributos diferentes numa única chamada (ex.: "idioma pt OU
+// autor no Brasil" dá erro 400), então duas chamadas é o jeito real de
+// fazer isso sem perder resultados.
+async function fetchOpenAlexWorks(filters: SearchFilters, extraFilterParts: string[]): Promise<any[]> {
   const openAlexParams = new URLSearchParams();
   openAlexParams.set("search", filters.query);
   openAlexParams.set("per_page", "15");
@@ -86,43 +106,75 @@ async function searchOpenAlex(filters: SearchFilters): Promise<AcademicSource[]>
   const dateFilterParts: string[] = [];
   if (filters.yearFrom) dateFilterParts.push(`from_publication_date:${filters.yearFrom}-01-01`);
   if (filters.yearTo) dateFilterParts.push(`to_publication_date:${filters.yearTo}-12-31`);
-  if (dateFilterParts.length) openAlexParams.set("filter", dateFilterParts.join(","));
+
+  const allFilterParts = [...dateFilterParts, ...extraFilterParts];
+  if (allFilterParts.length) openAlexParams.set("filter", allFilterParts.join(","));
 
   const openAlexResponse = await fetchWithTimeout(
     `https://api.openalex.org/works?${openAlexParams.toString()}`
   );
   if (!openAlexResponse.ok) throw new Error(describeProviderFailure("OpenAlex", openAlexResponse.status));
   const openAlexPayload = await openAlexResponse.json();
+  return openAlexPayload.results ?? [];
+}
 
-  return (openAlexPayload.results ?? []).map((openAlexWork: any): AcademicSource => {
-    const doi = normalizeDoi(openAlexWork.doi);
-    const openAccessPdfUrl: string | null =
-      openAlexWork.open_access?.oa_url ??
-      openAlexWork.best_oa_location?.pdf_url ??
-      openAlexWork.primary_location?.pdf_url ??
-      null;
-    return {
-      id: doi ? `doi:${doi}` : `openalex:${openAlexWork.id}`,
-      title: openAlexWork.title ?? openAlexWork.display_name ?? "Sem título",
-      authors: (openAlexWork.authorships ?? []).map((authorship: any) => ({
-        name: authorship.author?.display_name ?? "Autor desconhecido",
-      })),
-      year: openAlexWork.publication_year ?? null,
-      venue:
-        openAlexWork.primary_location?.source?.display_name ?? openAlexWork.host_venue?.display_name ?? null,
-      documentType: guessDocumentType(openAlexWork.type),
-      abstract: reconstructAbstract(openAlexWork.abstract_inverted_index),
-      doi,
-      citationCount: openAlexWork.cited_by_count ?? null,
-      language: openAlexWork.language ?? null,
-      sourceProvider: "openalex",
-      access: {
-        status: openAlexWork.open_access?.is_oa ? "open" : openAccessPdfUrl ? "open" : "unknown",
-        openAccessPdfUrl,
-        purchaseUrl: null,
-      },
-    };
-  });
+function mapOpenAlexWork(openAlexWork: any): AcademicSource {
+  const doi = normalizeDoi(openAlexWork.doi);
+  const openAccessPdfUrl: string | null =
+    openAlexWork.open_access?.oa_url ??
+    openAlexWork.best_oa_location?.pdf_url ??
+    openAlexWork.primary_location?.pdf_url ??
+    null;
+  return {
+    id: doi ? `doi:${doi}` : `openalex:${openAlexWork.id}`,
+    title: openAlexWork.title ?? openAlexWork.display_name ?? "Sem título",
+    authors: (openAlexWork.authorships ?? []).map((authorship: any) => ({
+      name: authorship.author?.display_name ?? "Autor desconhecido",
+    })),
+    year: openAlexWork.publication_year ?? null,
+    venue:
+      openAlexWork.primary_location?.source?.display_name ?? openAlexWork.host_venue?.display_name ?? null,
+    documentType: guessDocumentType(openAlexWork.type),
+    abstract: reconstructAbstract(openAlexWork.abstract_inverted_index),
+    doi,
+    citationCount: openAlexWork.cited_by_count ?? null,
+    language: openAlexWork.language ?? null,
+    sourceProvider: "openalex",
+    access: {
+      status: openAlexWork.open_access?.is_oa ? "open" : openAccessPdfUrl ? "open" : "unknown",
+      openAccessPdfUrl,
+      purchaseUrl: null,
+    },
+  };
+}
+
+async function searchOpenAlex(filters: SearchFilters): Promise<AcademicSource[]> {
+  // Busca geral + busca específica de produção com afiliação brasileira, em
+  // paralelo. A segunda garante que trabalho brasileiro apareça mesmo quando
+  // não ficaria bem ranqueado numa busca de relevância genérica — é o que o
+  // Victor pediu como prioridade ("principalmente artigos... brasileiros").
+  //
+  // Uso allSettled em vez de Promise.all de propósito: se só a chamada
+  // "Brasil" falhar (ex.: instabilidade pontual do filtro), ainda quero
+  // devolver a busca geral em vez de derrubar o provedor OpenAlex inteiro.
+  const [generalResult, brazilianResult] = await Promise.allSettled([
+    fetchOpenAlexWorks(filters, []),
+    fetchOpenAlexWorks(filters, ["authorships.countries:BR"]),
+  ]);
+
+  if (generalResult.status === "rejected" && brazilianResult.status === "rejected") {
+    throw generalResult.reason;
+  }
+
+  const generalWorks = generalResult.status === "fulfilled" ? generalResult.value : [];
+  const brazilianWorks = brazilianResult.status === "fulfilled" ? brazilianResult.value : [];
+  if (brazilianResult.status === "rejected") {
+    logger.warn("Busca OpenAlex específica de afiliação brasileira falhou; seguindo só com a geral", {
+      error: brazilianResult.reason?.message ?? String(brazilianResult.reason),
+    });
+  }
+
+  return [...generalWorks, ...brazilianWorks].map(mapOpenAlexWork);
 }
 
 async function searchCrossref(filters: SearchFilters): Promise<AcademicSource[]> {
@@ -218,6 +270,10 @@ async function searchGoogleBooks(filters: SearchFilters): Promise<AcademicSource
   const googleBooksParams = new URLSearchParams();
   googleBooksParams.set("q", filters.query);
   googleBooksParams.set("maxResults", "10");
+  // Região BR: afeta qual link de compra/disponibilidade a API devolve
+  // (preço e "for sale" variam por país). Sem isso, às vezes vinha link
+  // pra loja americana pra um livro que só vende no Brasil.
+  googleBooksParams.set("country", "BR");
   if (GOOGLE_BOOKS_API_KEY) googleBooksParams.set("key", GOOGLE_BOOKS_API_KEY);
 
   const googleBooksResponse = await fetchWithTimeout(
@@ -410,13 +466,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     await enrichWithUnpaywall(mergedSources);
     mergedSources = applyFilters(mergedSources, filters);
 
-    // Resultados com mais citações e com PDF aberto disponível sobem no ranking —
-    // relevância bibliométrica + facilidade de acesso imediato.
+    // Prioridade agora é conteúdo em português primeiro (Victor pediu foco
+    // em produção brasileira), depois acesso aberto, depois citações. Não
+    // uso "país do autor" aqui pro ranking porque esse dado não sobrevive à
+    // deduplicação por DOI direito (fica só no registro que "ganhou" o
+    // merge) — idioma é o sinal que temos com mais confiança em todo item.
     mergedSources.sort((sourceA, sourceB) => {
+      const brazilScore = (academicSource: AcademicSource) => (academicSource.language === "pt" ? 1 : 0);
+      const brazilDiff = brazilScore(sourceB) - brazilScore(sourceA);
+      if (brazilDiff !== 0) return brazilDiff;
+
       const accessScore = (academicSource: AcademicSource) =>
         academicSource.access.status === "open" ? 1 : 0;
       const accessDiff = accessScore(sourceB) - accessScore(sourceA);
       if (accessDiff !== 0) return accessDiff;
+
       return (sourceB.citationCount ?? 0) - (sourceA.citationCount ?? 0);
     });
 
