@@ -2,15 +2,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import type { RelevanceRequest, RelevanceResponse } from "../src/features/search/types";
 import { logger } from "../src/shared/utils/logger";
 
-// Gerado sob demanda — apenas quando o usuário clica em "Por que isso é
-// relevante" para UM item específico, nunca em lote para a listagem inteira.
-// Isso mantém latência e custo de API previsíveis.
-
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY ?? "";
-// Haiku 4.5 deu conta bem nos testes que fiz (justificativa de 2-3 frases
-// não precisa do raciocínio mais pesado do Sonnet). Se a qualidade cair
-// muito reclamada, trocar por "claude-sonnet-5" aqui é a única mudança
-// necessária — o resto do handler não depende do modelo específico.
 const RELEVANCE_MODEL = "claude-haiku-4-5-20251001";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
