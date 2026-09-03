@@ -3,7 +3,7 @@
   "outputDirectory": "dist",
   "functions": {
     "api/**/*.ts": {
-      "maxDuration": 20
+      "maxDuration": 10
     }
   },
   "rewrites": [{ "source": "/((?!api/).*)", "destination": "/index.html" }]

@@ -57,7 +57,16 @@ export function ResultCard({
         ) : null}
       </div>
 
-      <h3 className="font-display text-lg leading-snug mb-1">{academicSource.title}</h3>
+      <h3 className="font-display text-lg leading-snug mb-1">
+        <a
+          href={academicSource.primaryUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="hover:text-library-dark hover:underline decoration-rule underline-offset-4"
+        >
+          {academicSource.title}
+        </a>
+      </h3>
       <p className="text-sm text-ink/70">{authorLine}</p>
       {venueLine && <p className="text-sm text-ink/50 mb-3">{venueLine}</p>}
 

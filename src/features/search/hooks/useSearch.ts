@@ -2,14 +2,24 @@ import { useState } from "react";
 import { logger } from "@/shared/utils/logger";
 import type { SearchFilters, SearchResponse } from "../types";
 
-// Buscas de 1 caractere só devolvem ruído nas APIs acadêmicas (testei com
-// "a" no OpenAlex — 200+ resultados irrelevantes) e ainda gastam uma
-// chamada de cada provedor à toa. Vale barrar antes de sair da tela.
 const MIN_QUERY_LENGTH = 2;
+const MAX_TERMS = 3;
+const PAGE_SIZE = 20;
 
-function buildSearchParams(filters: SearchFilters): URLSearchParams {
+function splitTerms(rawQuery: string): string[] {
+  return Array.from(
+    new Set(
+      rawQuery
+        .split(",")
+        .map((term) => term.trim())
+        .filter((term) => term.length >= MIN_QUERY_LENGTH)
+    )
+  ).slice(0, MAX_TERMS);
+}
+
+function buildSearchParams(filters: SearchFilters, terms: string[]): URLSearchParams {
   const searchParams = new URLSearchParams();
-  searchParams.set("query", filters.query);
+  terms.forEach((term) => searchParams.append("query", term));
   if (filters.yearFrom) searchParams.set("yearFrom", String(filters.yearFrom));
   if (filters.yearTo) searchParams.set("yearTo", String(filters.yearTo));
   if (filters.documentType) searchParams.set("documentType", filters.documentType);
@@ -24,16 +34,15 @@ export function useSearch() {
   const [isSearching, setIsSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [hasSearched, setHasSearched] = useState(false);
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
 
   async function runSearch(nextFilters: SearchFilters) {
-    const trimmedQuery = nextFilters.query.trim();
+    const terms = splitTerms(nextFilters.query);
     setFilters(nextFilters);
     setHasSearched(true);
+    setVisibleCount(PAGE_SIZE);
 
-    if (trimmedQuery.length < MIN_QUERY_LENGTH) {
-      // hasSearched precisa ir pra true aqui também, senão a SearchPage
-      // (que só renderiza a área de erro depois da primeira busca) nunca
-      // chega a mostrar essa mensagem. Achei isso testando com "a".
+    if (terms.length === 0) {
       setSearchError(`Digite pelo menos ${MIN_QUERY_LENGTH} caracteres para buscar.`);
       return;
     }
@@ -41,7 +50,7 @@ export function useSearch() {
     setIsSearching(true);
     setSearchError(null);
     try {
-      const httpResponse = await fetch(`/api/search?${buildSearchParams(nextFilters).toString()}`);
+      const httpResponse = await fetch(`/api/search?${buildSearchParams(nextFilters, terms).toString()}`);
       if (!httpResponse.ok) {
         const errorBody = await httpResponse.text().catch(() => "");
         throw new Error(
@@ -50,10 +59,8 @@ export function useSearch() {
       }
       setSearchQueryResponse((await httpResponse.json()) as SearchResponse);
     } catch (err) {
-      // Sem contexto (query, filtros) um "fetch failed" solto no console não
-      // ajuda a debugar nada depois de o usuário já ter saído da página.
       logger.error("Falha ao buscar fontes acadêmicas", {
-        query: nextFilters.query,
+        terms,
         filters: nextFilters,
         error: err instanceof Error ? err.message : String(err),
       });
@@ -63,9 +70,15 @@ export function useSearch() {
     }
   }
 
+  const visibleResults = searchQueryResponse?.results.slice(0, visibleCount) ?? [];
+  const hasMore = (searchQueryResponse?.results.length ?? 0) > visibleCount;
+
   return {
     filters,
     searchQueryResponse,
+    visibleResults,
+    hasMore,
+    loadMore: () => setVisibleCount((count) => count + PAGE_SIZE),
     isSearching,
     searchError,
     hasSearched,

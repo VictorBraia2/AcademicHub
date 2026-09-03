@@ -79,7 +79,14 @@ export function RelevancePanel({ query, source }: RelevancePanelProps) {
         <div className="margin-note mt-3 py-1 text-sm text-ink/80 max-w-prose">
           {isLoading && <p className="italic text-ink/50">Lendo o resumo e comparando com sua busca…</p>}
           {relevanceError && <p className="text-stamp">{relevanceError}</p>}
-          {explanation && <p>{explanation}</p>}
+          {explanation && (
+            <>
+              <p>{explanation}</p>
+              <p className="text-xs text-ink/40 mt-2">
+                Gerado por IA a partir do resumo — confira o artigo original antes de citar.
+              </p>
+            </>
+          )}
         </div>
       )}
     </div>

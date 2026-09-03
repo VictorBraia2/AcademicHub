@@ -13,8 +13,18 @@ interface SearchPageProps {
 
 export function SearchPage({ user }: SearchPageProps) {
   const navigate = useNavigate();
-  const { filters, searchQueryResponse, isSearching, searchError, hasSearched, search, updateFilters } =
-    useSearch();
+  const {
+    filters,
+    searchQueryResponse,
+    visibleResults,
+    hasMore,
+    loadMore,
+    isSearching,
+    searchError,
+    hasSearched,
+    search,
+    updateFilters,
+  } = useSearch();
 
   const { collections, createCollection } = useCollections(user?.id);
   // Meio gambiarra: só quero a função saveSource daqui, não a lista de fontes
@@ -52,7 +62,7 @@ export function SearchPage({ user }: SearchPageProps) {
                 </p>
 
                 <div className="space-y-4">
-                  {searchQueryResponse.results.map((academicSource) => (
+                  {visibleResults.map((academicSource) => (
                     <ResultCard
                       key={academicSource.id}
                       source={academicSource}
@@ -67,6 +77,12 @@ export function SearchPage({ user }: SearchPageProps) {
                     />
                   ))}
                 </div>
+
+                {hasMore && (
+                  <button onClick={loadMore} className="btn-secondary text-sm mt-6 mx-auto block">
+                    Carregar mais resultados
+                  </button>
+                )}
 
                 {searchQueryResponse.results.length === 0 && !isSearching && (
                   <p className="text-ink/50 text-sm">

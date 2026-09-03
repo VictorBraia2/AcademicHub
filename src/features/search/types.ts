@@ -19,7 +19,7 @@ export interface AcademicSource {
   citationCount: number | null;
   language: string | null;
   /** De onde os metadados vieram (para transparência e depuração) */
-  sourceProvider: "openalex" | "crossref" | "semantic_scholar" | "google_books";
+  sourceProvider: "openalex" | "crossref" | "semantic_scholar" | "google_books" | "doaj";
   access: {
     status: AccessStatus;
     /** Link direto para PDF legal e gratuito, quando existe */
@@ -27,6 +27,8 @@ export interface AcademicSource {
     /** Link de compra ou acesso na editora/loja, quando a fonte é paga */
     purchaseUrl: string | null;
   };
+  /** PDF aberto → DOI → link de compra/leitura → busca no Google Scholar */
+  primaryUrl: string;
 }
 
 export interface SearchFilters {

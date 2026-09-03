@@ -98,6 +98,19 @@ nada, uma fonte que veio da busca.
 - **Relevância é sob demanda, nunca em lote.** Gerar justificativa pra ~20
   resultados de uma vez custaria caro e travaria a lista. Só dispara quando
   o usuário clica no item, com cache em memória por sessão.
+- **DOAJ como provedor extra, priorizando periódicos brasileiros.** Igual ao
+  OpenAlex, faz duas chamadas (geral + `bibjson.journal.country:BR`). DOAJ
+  só indexa acesso aberto, então todo resultado de lá já sai com
+  `access.status: "open"`.
+- **Filtro de idioma é estrito.** Quando `filters.language` está definido,
+  qualquer fonte sem idioma normalizado igual é excluída — inclusive as sem
+  idioma nenhum (ex.: Semantic Scholar, que não retorna esse dado). Isso
+  reduz volume quando o filtro de português está ativo, mas evita mostrar
+  fonte em inglês numa busca marcada como "só português".
+- **`primaryUrl` sempre aponta pra algum lugar.** PDF aberto → DOI → link de
+  compra/leitura → busca no Google Scholar pelo título. O último passo nunca
+  falha (é só uma URL de busca), então todo card é clicável mesmo sem link
+  direto.
 - **Citação é regra, não IA.** Formatar ABNT/APA/IEEE/BibTeX é determinístico
   a partir dos metadados — não tem por que gastar uma chamada de modelo (ou
   arriscar um autor inventado) nisso.
@@ -106,8 +119,9 @@ nada, uma fonte que veio da busca.
 
 Coisas que sei que faltam e decidi não resolver agora:
 
-- **Sem paginação.** `api/search.ts` corta em 40 resultados. Um termo muito
-  genérico perde resultado sem avisar que perdeu.
+- **Multi-termo é limitado a 3 buscas simultâneas e não escala infinitamente.**
+  Cada termo dispara os 5 provedores em paralelo; mais que isso e o risco de
+  estourar os 10s do plano Hobby do Vercel fica alto demais.
 - **Sem confirmação bonita antes de excluir coleção** — é um `window.confirm`
   simples (`CollectionSidebar.tsx`). Funciona, mas destoa do resto da UI.
 - **Chave do BibTeX pode colidir** em casos raros (mesmo autor, mesmo ano,

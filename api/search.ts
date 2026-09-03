@@ -5,17 +5,39 @@ import type {
   SearchFilters,
   SearchResponse,
 } from "../src/features/search/types";
+import { logger } from "../src/shared/utils/logger";
 
+// OpenAlex passou a exigir api_key a partir de 13/fev/2026 (antes bastava
+// mailto). Crossref e Unpaywall continuam usando apenas e-mail de contato.
+//
+// TODO/nota: pesquisei integrar SciELO diretamente (faria sentido, é a
+// principal base brasileira de periódicos). A API oficial deles
+// (articlemeta.scielo.org) só serve pra baixar registro que você já sabe o
+// ID/ISSN/coleção — não tem busca por palavra-chave. Existe um endpoint de
+// busca em search.scielo.org que o site usa internamente, mas o próprio
+// time da SciELO trata isso como uso interno, não uma API pública estável
+// (um script deles no GitHub literalmente comenta "a API é pra harvesting,
+// não pra query" e contorna isso raspando a busca do site). Não quis
+// depender de algo que pode quebrar sem aviso. Por ora, a cobertura
+// brasileira vem do OpenAlex (que indexa boa parte do SciELO via DOIs
+// registrados no Crossref) com a query extra abaixo filtrando por afiliação
+// de autor no Brasil. Se um dia a SciELO abrir uma busca oficial, vale
+// revisitar.
 const OPENALEX_API_KEY = process.env.OPENALEX_API_KEY ?? "";
 const CONTACT_EMAIL = process.env.ACADEMICHUB_CONTACT_EMAIL ?? "";
 const SEMANTIC_SCHOLAR_API_KEY = process.env.SEMANTIC_SCHOLAR_API_KEY ?? "";
 const GOOGLE_BOOKS_API_KEY = process.env.GOOGLE_BOOKS_API_KEY ?? "";
 
-const FETCH_TIMEOUT_MS = 8000;
+const FETCH_TIMEOUT_MS = 6000;
+const UNPAYWALL_TIMEOUT_MS = 3500;
 
-async function fetchWithTimeout(url: string, init?: RequestInit): Promise<Response> {
+async function fetchWithTimeout(
+  url: string,
+  init?: RequestInit,
+  timeoutMs = FETCH_TIMEOUT_MS
+): Promise<Response> {
   const abortController = new AbortController();
-  const timeoutHandle = setTimeout(() => abortController.abort(), FETCH_TIMEOUT_MS);
+  const timeoutHandle = setTimeout(() => abortController.abort(), timeoutMs);
   try {
     return await fetch(url, { ...init, signal: abortController.signal });
   } finally {
@@ -25,7 +47,10 @@ async function fetchWithTimeout(url: string, init?: RequestInit): Promise<Respon
 
 function normalizeDoi(doi: string | null | undefined): string | null {
   if (!doi) return null;
-
+  // O Crossref às vezes devolve DOI como string vazia em vez de omitir o
+  // campo (aconteceu com alguns registros de capítulo de livro) — o !doi
+  // acima já cobre isso, mas deixando registrado porque não é óbvio olhando
+  // só a assinatura da função.
   return doi
     .trim()
     .toLowerCase()
@@ -33,6 +58,41 @@ function normalizeDoi(doi: string | null | undefined): string | null {
     .replace(/^doi:/, "");
 }
 
+const LANGUAGE_ALIASES: Record<string, string> = {
+  pt: "pt",
+  por: "pt",
+  portuguese: "pt",
+  português: "pt",
+  portugues: "pt",
+  en: "en",
+  eng: "en",
+  english: "en",
+  inglês: "en",
+  ingles: "en",
+  es: "es",
+  spa: "es",
+  spanish: "es",
+  español: "es",
+  espanhol: "es",
+};
+
+function normalizeLanguageCode(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const cleaned = raw.trim().toLowerCase().split(/[-_]/)[0];
+  return LANGUAGE_ALIASES[cleaned] ?? (cleaned.length === 2 ? cleaned : null);
+}
+
+function buildPrimaryUrl(academicSource: AcademicSource): string {
+  if (academicSource.access.openAccessPdfUrl) return academicSource.access.openAccessPdfUrl;
+  if (academicSource.doi) return `https://doi.org/${academicSource.doi}`;
+  if (academicSource.access.purchaseUrl) return academicSource.access.purchaseUrl;
+  return `https://scholar.google.com/scholar?q=${encodeURIComponent(academicSource.title)}`;
+}
+
+// Mensagem de erro específica pra rate limit em vez de deixar virar só mais
+// um "Falha desconhecida" no card de resultados — 429 é a causa mais comum
+// de erro nesses provedores no uso real (principalmente Semantic Scholar
+// sem chave de API, que cai no pool anônimo de 100 req/5min).
 function describeProviderFailure(providerLabel: string, status: number): string {
   if (status === 429) return `${providerLabel} limitou as requisições (429) — tenta de novo em instantes.`;
   if (status >= 500) return `${providerLabel} está indisponível no momento (${status}).`;
@@ -53,6 +113,8 @@ function guessDocumentType(rawType: string | undefined | null): DocumentType {
   return "other";
 }
 
+// OpenAlex retorna o abstract como um índice invertido (economiza espaço),
+// então precisamos reconstruir o texto corrido a partir das posições.
 function reconstructAbstract(invertedIndex: Record<string, number[]> | undefined): string | null {
   if (!invertedIndex) return null;
   const wordPositions: [number, string][] = [];
@@ -64,10 +126,16 @@ function reconstructAbstract(invertedIndex: Record<string, number[]> | undefined
   return reconstructedText.length > 0 ? reconstructedText : null;
 }
 
+// Extraído pra função própria porque agora é chamado duas vezes: uma busca
+// geral e uma segunda, específica, filtrando por afiliação de autor no
+// Brasil (ver searchOpenAlex). O OpenAlex não deixa combinar OR entre
+// filtros de atributos diferentes numa única chamada (ex.: "idioma pt OU
+// autor no Brasil" dá erro 400), então duas chamadas é o jeito real de
+// fazer isso sem perder resultados.
 async function fetchOpenAlexWorks(filters: SearchFilters, extraFilterParts: string[]): Promise<any[]> {
   const openAlexParams = new URLSearchParams();
   openAlexParams.set("search", filters.query);
-  openAlexParams.set("per_page", "15");
+  openAlexParams.set("per_page", "100");
   if (OPENALEX_API_KEY) openAlexParams.set("api_key", OPENALEX_API_KEY);
   if (CONTACT_EMAIL) openAlexParams.set("mailto", CONTACT_EMAIL);
 
@@ -106,17 +174,26 @@ function mapOpenAlexWork(openAlexWork: any): AcademicSource {
     abstract: reconstructAbstract(openAlexWork.abstract_inverted_index),
     doi,
     citationCount: openAlexWork.cited_by_count ?? null,
-    language: openAlexWork.language ?? null,
+    language: normalizeLanguageCode(openAlexWork.language),
     sourceProvider: "openalex",
     access: {
       status: openAlexWork.open_access?.is_oa ? "open" : openAccessPdfUrl ? "open" : "unknown",
       openAccessPdfUrl,
       purchaseUrl: null,
     },
+    primaryUrl: "",
   };
 }
 
 async function searchOpenAlex(filters: SearchFilters): Promise<AcademicSource[]> {
+  // Busca geral + busca específica de produção com afiliação brasileira, em
+  // paralelo. A segunda garante que trabalho brasileiro apareça mesmo quando
+  // não ficaria bem ranqueado numa busca de relevância genérica — é o que o
+  // Victor pediu como prioridade ("principalmente artigos... brasileiros").
+  //
+  // Uso allSettled em vez de Promise.all de propósito: se só a chamada
+  // "Brasil" falhar (ex.: instabilidade pontual do filtro), ainda quero
+  // devolver a busca geral em vez de derrubar o provedor OpenAlex inteiro.
   const [generalResult, brazilianResult] = await Promise.allSettled([
     fetchOpenAlexWorks(filters, []),
     fetchOpenAlexWorks(filters, ["authorships.countries:BR"]),
@@ -129,7 +206,7 @@ async function searchOpenAlex(filters: SearchFilters): Promise<AcademicSource[]>
   const generalWorks = generalResult.status === "fulfilled" ? generalResult.value : [];
   const brazilianWorks = brazilianResult.status === "fulfilled" ? brazilianResult.value : [];
   if (brazilianResult.status === "rejected") {
-    console.warn("Busca OpenAlex específica de afiliação brasileira falhou; seguindo só com a geral:", {
+    logger.warn("Busca OpenAlex específica de afiliação brasileira falhou; seguindo só com a geral", {
       error: brazilianResult.reason?.message ?? String(brazilianResult.reason),
     });
   }
@@ -140,7 +217,7 @@ async function searchOpenAlex(filters: SearchFilters): Promise<AcademicSource[]>
 async function searchCrossref(filters: SearchFilters): Promise<AcademicSource[]> {
   const crossrefParams = new URLSearchParams();
   crossrefParams.set("query", filters.query);
-  crossrefParams.set("rows", "15");
+  crossrefParams.set("rows", "60");
   if (CONTACT_EMAIL) crossrefParams.set("mailto", CONTACT_EMAIL);
 
   const crossrefResponse = await fetchWithTimeout(
@@ -172,17 +249,23 @@ async function searchCrossref(filters: SearchFilters): Promise<AcademicSource[]>
       abstract: crossrefItem.abstract ? String(crossrefItem.abstract).replace(/<\/?jats:[^>]+>/g, "") : null,
       doi,
       citationCount: crossrefItem["is-referenced-by-count"] ?? null,
-      language: crossrefItem.language ?? null,
+      language: normalizeLanguageCode(crossrefItem.language),
       sourceProvider: "crossref",
       access: { status: "unknown", openAccessPdfUrl: null, purchaseUrl: crossrefItem.URL ?? null },
+      primaryUrl: "",
     };
   });
 }
 
 async function searchSemanticScholar(filters: SearchFilters): Promise<AcademicSource[]> {
+  // Sem SEMANTIC_SCHOLAR_API_KEY isso cai no pool anônimo (100 req/5min por
+  // IP, que no caso do Vercel é compartilhado entre várias execuções da
+  // função) — o 429 aparece com mais frequência do que os outros provedores
+  // nesse cenário. Não implementei retry/backoff; por ora só devolve o erro
+  // pro card do provedor específico sem derrubar os outros três.
   const semanticScholarParams = new URLSearchParams();
   semanticScholarParams.set("query", filters.query);
-  semanticScholarParams.set("limit", "15");
+  semanticScholarParams.set("limit", "100");
   semanticScholarParams.set(
     "fields",
     "title,abstract,year,authors,venue,externalIds,openAccessPdf,citationCount,publicationTypes"
@@ -217,6 +300,7 @@ async function searchSemanticScholar(filters: SearchFilters): Promise<AcademicSo
         openAccessPdfUrl: semanticScholarPaper.openAccessPdf?.url ?? null,
         purchaseUrl: null,
       },
+      primaryUrl: "",
     };
   });
 }
@@ -224,8 +308,10 @@ async function searchSemanticScholar(filters: SearchFilters): Promise<AcademicSo
 async function searchGoogleBooks(filters: SearchFilters): Promise<AcademicSource[]> {
   const googleBooksParams = new URLSearchParams();
   googleBooksParams.set("q", filters.query);
-  googleBooksParams.set("maxResults", "10");
-
+  googleBooksParams.set("maxResults", "40");
+  // Região BR: afeta qual link de compra/disponibilidade a API devolve
+  // (preço e "for sale" variam por país). Sem isso, às vezes vinha link
+  // pra loja americana pra um livro que só vende no Brasil.
   googleBooksParams.set("country", "BR");
   if (GOOGLE_BOOKS_API_KEY) googleBooksParams.set("key", GOOGLE_BOOKS_API_KEY);
 
@@ -251,7 +337,7 @@ async function searchGoogleBooks(filters: SearchFilters): Promise<AcademicSource
       abstract: volumeInfo.description ?? null,
       doi: null,
       citationCount: null,
-      language: volumeInfo.language ?? null,
+      language: normalizeLanguageCode(volumeInfo.language),
       sourceProvider: "google_books",
       access: {
         status: isFreeEbook ? "open" : saleInfo.saleability === "FOR_SALE" ? "paywalled" : "unknown",
@@ -259,23 +345,93 @@ async function searchGoogleBooks(filters: SearchFilters): Promise<AcademicSource
         purchaseUrl:
           saleInfo.saleability === "FOR_SALE" ? (saleInfo.buyLink ?? null) : (volumeInfo.infoLink ?? null),
       },
+      primaryUrl: "",
     };
   });
 }
 
+async function fetchDoajArticles(query: string): Promise<any[]> {
+  const doajParams = new URLSearchParams();
+  doajParams.set("pageSize", "60");
+  doajParams.set("page", "1");
+
+  const doajResponse = await fetchWithTimeout(
+    `https://doaj.org/api/search/articles/${encodeURIComponent(query)}?${doajParams.toString()}`
+  );
+  if (!doajResponse.ok) throw new Error(describeProviderFailure("DOAJ", doajResponse.status));
+  const doajPayload = await doajResponse.json();
+  return doajPayload.results ?? [];
+}
+
+function mapDoajArticle(doajArticle: any): AcademicSource {
+  const bibjson = doajArticle.bibjson ?? {};
+  const identifiers = bibjson.identifier ?? [];
+  const doiEntry = identifiers.find((identifier: any) => identifier.type === "doi");
+  const doi = normalizeDoi(doiEntry?.id);
+  const links = bibjson.link ?? [];
+  const fulltextLink = links.find((link: any) => link.type === "fulltext")?.url ?? links[0]?.url ?? null;
+  const journalLanguages: string[] = bibjson.journal?.language ?? [];
+
+  return {
+    id: doi ? `doi:${doi}` : `doaj:${doajArticle.id}`,
+    title: bibjson.title ?? "Sem título",
+    authors: (bibjson.author ?? []).map((author: any) => ({ name: author.name ?? "Autor desconhecido" })),
+    year: bibjson.year ? Number(bibjson.year) || null : null,
+    venue: bibjson.journal?.title ?? null,
+    documentType: "article",
+    abstract: bibjson.abstract ?? null,
+    doi,
+    citationCount: null,
+    language: normalizeLanguageCode(journalLanguages[0]),
+    sourceProvider: "doaj",
+    access: {
+      status: "open",
+      openAccessPdfUrl: fulltextLink,
+      purchaseUrl: null,
+    },
+    primaryUrl: "",
+  };
+}
+
+async function searchDoaj(filters: SearchFilters): Promise<AcademicSource[]> {
+  const [generalResult, brazilianResult] = await Promise.allSettled([
+    fetchDoajArticles(filters.query),
+    fetchDoajArticles(`(${filters.query}) AND bibjson.journal.country:BR`),
+  ]);
+
+  if (generalResult.status === "rejected" && brazilianResult.status === "rejected") {
+    throw generalResult.reason;
+  }
+
+  const generalArticles = generalResult.status === "fulfilled" ? generalResult.value : [];
+  const brazilianArticles = brazilianResult.status === "fulfilled" ? brazilianResult.value : [];
+  if (brazilianResult.status === "rejected") {
+    logger.warn("Busca DOAJ específica de periódico brasileiro falhou; seguindo só com a geral", {
+      error: brazilianResult.reason?.message ?? String(brazilianResult.reason),
+    });
+  }
+
+  return [...generalArticles, ...brazilianArticles].map(mapDoajArticle);
+}
+
+// Enriquecimento: Unpaywall preenche o link de PDF aberto quando os outros
+// provedores só sinalizaram "unknown" mas o item tem DOI. Limitado às
+// primeiras posições do resultado combinado para não estourar a latência.
 async function enrichWithUnpaywall(academicSources: AcademicSource[]): Promise<void> {
   const contactEmail = process.env.UNPAYWALL_EMAIL ?? CONTACT_EMAIL;
   if (!contactEmail) return;
 
   const unpaywallCandidates = academicSources
     .filter((academicSource) => academicSource.doi && academicSource.access.status === "unknown")
-    .slice(0, 10);
+    .slice(0, 25);
 
   await Promise.all(
     unpaywallCandidates.map(async (academicSource) => {
       try {
         const unpaywallResponse = await fetchWithTimeout(
-          `https://api.unpaywall.org/v2/${encodeURIComponent(academicSource.doi!)}?email=${encodeURIComponent(contactEmail)}`
+          `https://api.unpaywall.org/v2/${encodeURIComponent(academicSource.doi!)}?email=${encodeURIComponent(contactEmail)}`,
+          undefined,
+          UNPAYWALL_TIMEOUT_MS
         );
         if (!unpaywallResponse.ok) return;
         const unpaywallPayload = await unpaywallResponse.json();
@@ -291,7 +447,10 @@ async function enrichWithUnpaywall(academicSources: AcademicSource[]): Promise<v
             (academicSource.doi ? `https://doi.org/${academicSource.doi}` : null);
         }
       } catch (err) {
-        console.warn("Falha ao enriquecer fonte via Unpaywall:", {
+        // Falha isolada de enriquecimento não deve derrubar a busca inteira,
+        // mas vale saber que aconteceu (senão parece só que o Unpaywall
+        // "não sabia" o status de acesso, quando na real a chamada falhou).
+        logger.warn("Falha ao enriquecer fonte via Unpaywall", {
           doi: academicSource.doi,
           error: err instanceof Error ? err.message : String(err),
         });
@@ -300,6 +459,8 @@ async function enrichWithUnpaywall(academicSources: AcademicSource[]): Promise<v
   );
 }
 
+// Deduplicação — DOI é a chave primária universal; sem DOI, cai para
+// título normalizado + ano como chave de fallback.
 function dedupeByDoi(academicSources: AcademicSource[]): AcademicSource[] {
   const sourcesByDedupeKey = new Map<string, AcademicSource>();
 
@@ -313,11 +474,14 @@ function dedupeByDoi(academicSources: AcademicSource[]): AcademicSource[] {
       sourcesByDedupeKey.set(dedupeKey, academicSource);
       continue;
     }
+    // Mantém o registro mais completo: prioriza quem já tem abstract e
+    // contagem de citações, e mescla o link de acesso aberto se só um lado tiver.
     const mergedSource: AcademicSource = {
       ...existingSource,
       abstract: existingSource.abstract ?? academicSource.abstract,
       citationCount: existingSource.citationCount ?? academicSource.citationCount,
       venue: existingSource.venue ?? academicSource.venue,
+      language: existingSource.language ?? academicSource.language,
       access: {
         status:
           existingSource.access.status !== "unknown"
@@ -338,8 +502,7 @@ function applyFilters(academicSources: AcademicSource[], filters: SearchFilters)
     if (filters.yearFrom && academicSource.year && academicSource.year < filters.yearFrom) return false;
     if (filters.yearTo && academicSource.year && academicSource.year > filters.yearTo) return false;
     if (filters.documentType && academicSource.documentType !== filters.documentType) return false;
-    if (filters.language && academicSource.language && academicSource.language !== filters.language)
-      return false;
+    if (filters.language && academicSource.language !== filters.language) return false;
     if (filters.accessOnly === "open" && academicSource.access.status !== "open") return false;
     return true;
   });
@@ -347,14 +510,28 @@ function applyFilters(academicSources: AcademicSource[], filters: SearchFilters)
 
 type ProviderName = AcademicSource["sourceProvider"];
 
+// Mesmo mínimo do useSearch no frontend — mas isso aqui é a validação que
+// realmente importa, já que o endpoint pode ser chamado direto (curl,
+// outro cliente, um bookmark velho) sem passar pela tela de busca.
 const MIN_QUERY_LENGTH = 2;
+const MAX_QUERIES_PER_REQUEST = 3;
+const MAX_RESULTS = 150;
+
+function parseQueryTerms(rawQuery: string | string[] | undefined): string[] {
+  const rawValues = Array.isArray(rawQuery) ? rawQuery : [rawQuery ?? ""];
+  const terms = rawValues
+    .flatMap((value) => value.split(","))
+    .map((term) => term.trim())
+    .filter((term) => term.length >= MIN_QUERY_LENGTH);
+  return Array.from(new Set(terms)).slice(0, MAX_QUERIES_PER_REQUEST);
+}
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  const query = String(req.query.query ?? "").trim();
-  if (query.length < MIN_QUERY_LENGTH) {
+  const queryTerms = parseQueryTerms(req.query.query as string | string[] | undefined);
+  if (queryTerms.length === 0) {
     res
       .status(400)
-      .json({ error: `Parâmetro 'query' precisa ter pelo menos ${MIN_QUERY_LENGTH} caracteres.` });
+      .json({ error: `Informe pelo menos um termo de busca com ${MIN_QUERY_LENGTH}+ caracteres.` });
     return;
   }
 
@@ -368,8 +545,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return;
   }
 
-  const filters: SearchFilters = {
-    query,
+  const sharedFilterInput = {
     yearFrom: parsedYearFrom,
     yearTo: parsedYearTo,
     documentType: (req.query.documentType as SearchFilters["documentType"]) || undefined,
@@ -378,34 +554,58 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   };
 
   try {
-    const providers: Array<[ProviderName, () => Promise<AcademicSource[]>]> = [
-      ["openalex", () => searchOpenAlex(filters)],
-      ["crossref", () => searchCrossref(filters)],
-      ["semantic_scholar", () => searchSemanticScholar(filters)],
-      ["google_books", () => searchGoogleBooks(filters)],
+    const providerFactories: Array<[ProviderName, (filters: SearchFilters) => Promise<AcademicSource[]>]> = [
+      ["openalex", searchOpenAlex],
+      ["crossref", searchCrossref],
+      ["semantic_scholar", searchSemanticScholar],
+      ["google_books", searchGoogleBooks],
+      ["doaj", searchDoaj],
     ];
 
-    const providerErrors: SearchResponse["providerErrors"] = {};
-    const providerResults = await Promise.allSettled(
-      providers.map(([, runProviderSearch]) => runProviderSearch())
+    const providerSuccessCount: Partial<Record<ProviderName, number>> = {};
+    const providerFailureMessage: Partial<Record<ProviderName, string>> = {};
+    let mergedSources: AcademicSource[] = [];
+
+    await Promise.all(
+      queryTerms.map(async (term) => {
+        const termFilters: SearchFilters = { query: term, ...sharedFilterInput };
+        const termResults = await Promise.allSettled(
+          providerFactories.map(([, runProviderSearch]) => runProviderSearch(termFilters))
+        );
+        termResults.forEach((termResult, providerIndex) => {
+          const [providerName] = providerFactories[providerIndex];
+          if (termResult.status === "fulfilled") {
+            providerSuccessCount[providerName] = (providerSuccessCount[providerName] ?? 0) + 1;
+            mergedSources = mergedSources.concat(termResult.value);
+          } else {
+            const failureMessage = termResult.reason?.message ?? "Falha desconhecida";
+            providerFailureMessage[providerName] = failureMessage;
+            logger.warn("Provedor de busca acadêmica falhou", {
+              provider: providerName,
+              term,
+              failureMessage,
+            });
+          }
+        });
+      })
     );
 
-    let mergedSources: AcademicSource[] = [];
-    providerResults.forEach((providerResult, providerIndex) => {
-      const [providerName] = providers[providerIndex];
-      if (providerResult.status === "fulfilled") {
-        mergedSources = mergedSources.concat(providerResult.value);
-      } else {
-        const failureMessage = providerResult.reason?.message ?? "Falha desconhecida";
-        providerErrors[providerName] = failureMessage;
-        console.warn("Provedor de busca acadêmica falhou:", { provider: providerName, query, failureMessage });
+    const providerErrors: SearchResponse["providerErrors"] = {};
+    providerFactories.forEach(([providerName]) => {
+      if (!providerSuccessCount[providerName] && providerFailureMessage[providerName]) {
+        providerErrors[providerName] = providerFailureMessage[providerName];
       }
     });
 
     mergedSources = dedupeByDoi(mergedSources);
     await enrichWithUnpaywall(mergedSources);
-    mergedSources = applyFilters(mergedSources, filters);
+    mergedSources = applyFilters(mergedSources, { query: queryTerms.join(" "), ...sharedFilterInput });
 
+    // Prioridade agora é conteúdo em português primeiro (Victor pediu foco
+    // em produção brasileira), depois acesso aberto, depois citações. Não
+    // uso "país do autor" aqui pro ranking porque esse dado não sobrevive à
+    // deduplicação por DOI direito (fica só no registro que "ganhou" o
+    // merge) — idioma é o sinal que temos com mais confiança em todo item.
     mergedSources.sort((sourceA, sourceB) => {
       const brazilScore = (academicSource: AcademicSource) => (academicSource.language === "pt" ? 1 : 0);
       const brazilDiff = brazilScore(sourceB) - brazilScore(sourceA);
@@ -420,7 +620,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     });
 
     const searchResponse: SearchResponse = {
-      results: mergedSources.slice(0, 40),
+      results: mergedSources.slice(0, MAX_RESULTS).map((academicSource) => ({
+        ...academicSource,
+        primaryUrl: buildPrimaryUrl(academicSource),
+      })),
       totalEstimate: mergedSources.length,
       providerErrors,
     };
@@ -428,8 +631,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     res.setHeader("Cache-Control", "s-maxage=300, stale-while-revalidate=600");
     res.status(200).json(searchResponse);
   } catch (err) {
-    console.error("Falha inesperada no handler de busca:", {
-      query,
+    // Isso só dispara se algo além das falhas por provedor (já tratadas
+    // acima) quebrar — ex.: bug na deduplicação ou no enriquecimento do
+    // Unpaywall. Sem esse catch, virava um 500 sem corpo nenhum pro cliente.
+    logger.error("Falha inesperada no handler de busca", {
+      queryTerms,
       error: err instanceof Error ? err.message : String(err),
     });
     res.status(500).json({ error: "Erro inesperado ao processar a busca. Tenta de novo em instantes." });

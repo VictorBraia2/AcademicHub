@@ -22,8 +22,8 @@ export function SearchBar({ initialValue = "", onSearch, loading }: SearchBarPro
           Encontre a fonte certa para sua pesquisa
         </h1>
         <p className="text-card/60 text-sm mb-7 max-w-prose mx-auto">
-          Busque por assunto, autor ou DOI. Artigos, livros e teses de várias bases, já organizados em um só
-          lugar.
+          Busque por assunto, autor ou DOI. Pode buscar até 3 temas ao mesmo tempo, separados por vírgula — os
+          resultados vêm combinados numa lista só.
         </p>
 
         <form onSubmit={handleSubmit} className="flex gap-2 max-w-2xl mx-auto">
@@ -31,7 +31,7 @@ export function SearchBar({ initialValue = "", onSearch, loading }: SearchBarPro
             type="text"
             value={searchInputValue}
             onChange={(e) => setSearchInputValue(e.target.value)}
-            placeholder='Ex.: "modelos de visão computacional em defesa" ou 10.1145/3442188.3445922'
+            placeholder="história da moda, moda na pandemia (separe temas por vírgula)"
             className="flex-1 bg-card text-ink px-4 py-3 text-sm border border-transparent focus:border-brass outline-none rounded-card"
           />
           <button
