@@ -84,3 +84,44 @@ export function useSearch() {
     },
   };
 }
+import { useState, useEffect } from 'react';
+import { supabase } from '../../../shared/lib/supabaseClient';
+import { SearchResult } from '../types';
+
+export function useSearch() {
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<SearchResult[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!query.trim()) {
+      setResults([]);
+      return;
+    }
+
+    const timer = setTimeout(async () => {
+      setLoading(true);
+      setError(null);
+
+      try {
+        const { data, error: supabaseError } = await supabase
+          .from('publications') 
+          .select('*')
+          .ilike('title', `%${query}%`);
+
+        if (supabaseError) throw supabaseError;
+        setResults(data || []);
+      } catch (err: any) {
+        setError(err.message);
+        setResults([]);
+      } finally {
+        setLoading(false);
+      }
+    }, 300);
+
+    return () => clearTimeout(timer);
+  }, [query]);
+
+  return { query, setQuery, results, loading, error };
+}
