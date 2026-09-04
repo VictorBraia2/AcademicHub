@@ -1,7 +1,9 @@
 import { useState, useEffect } from "react";
 import { supabase } from "@/shared/lib/supabaseClient";
 import { logger } from "@/shared/utils/logger";
-import type { SearchFilters, SearchResponse, SearchResult } from "../types";
+import type { SearchFilters, SearchResponse } from "../types";
+
+type SearchResult = SearchResponse["results"][number];
 
 const MIN_QUERY_LENGTH = 2;
 const PAGE_SIZE = 20;
@@ -36,11 +38,10 @@ export function useSearch() {
 
       try {
         let queryBuilder = supabase
-          .from("publications") // Substitua pelo nome da sua tabela (ex: 'papers')
+          .from("publications") 
           .select("*")
           .ilike("title", `%${rawQuery}%`);
 
-        // Aplicação dos filtros adicionais se presentes
         if (filters.yearFrom) {
           queryBuilder = queryBuilder.gte("year", filters.yearFrom);
         }
@@ -58,7 +59,7 @@ export function useSearch() {
 
         if (error) throw error;
 
-        setResults((data as SearchResult[]) || []);
+        setResults((data as unknown as SearchResult[]) || []);
       } catch (err) {
         const errorMessage = err instanceof Error ? err.message : "Erro ao realizar busca no banco.";
         logger.error("Falha ao buscar publicações", {
@@ -78,9 +79,14 @@ export function useSearch() {
   const visibleResults = results.slice(0, visibleCount);
   const hasMore = results.length > visibleCount;
 
+  const searchQueryResponse: SearchResponse | null = hasSearched
+    ? ({ results, total: results.length } as unknown as SearchResponse)
+    : null;
+
   return {
     filters,
     results,
+    searchQueryResponse,
     visibleResults,
     hasMore,
     isSearching,
