@@ -10,7 +10,6 @@ interface AuthState {
 
 export function useAuth() {
   const [authState, setAuthState] = useState<AuthState>({ user: null, session: null, loading: true });
-
   useEffect(() => {
     supabase.auth.getSession().then(({ data: sessionResult }) => {
       setAuthState({
@@ -19,22 +18,17 @@ export function useAuth() {
         loading: false,
       });
     });
-
     const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
       setAuthState({ user: session?.user ?? null, session, loading: false });
     });
-
     return () => authListener.subscription.unsubscribe();
   }, []);
-
   async function signInWithMagicLink(email: string) {
     const { error: signInError } = await supabase.auth.signInWithOtp({ email });
     if (signInError) throw signInError;
   }
-
   async function signOut() {
     await supabase.auth.signOut();
   }
-
   return { ...authState, signInWithMagicLink, signOut };
 }

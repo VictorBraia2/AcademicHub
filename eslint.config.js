@@ -4,7 +4,6 @@ import reactHooks from "eslint-plugin-react-hooks";
 import reactRefresh from "eslint-plugin-react-refresh";
 import tseslint from "typescript-eslint";
 import prettierConfig from "eslint-config-prettier";
-
 export default tseslint.config(
   { ignores: ["dist", "node_modules", ".tsbuild-node"] },
   {
@@ -27,18 +26,12 @@ export default tseslint.config(
     },
   },
   {
-    // logger.ts é o único lugar que tem permissão de chamar console.* — é
-    // literalmente o trabalho dele. Em qualquer outro arquivo, a regra
-    // acima continua valendo (só console.error é permitido direto).
     files: ["src/shared/utils/logger.ts"],
     rules: {
       "no-console": "off",
     },
   },
   {
-    // Funções serverless lidam com JSON não tipado vindo de APIs externas
-    // (OpenAlex, Crossref, Semantic Scholar, Google Books, Unpaywall,
-    // Anthropic) — 'any' ali é uma escolha deliberada, não descuido.
     files: ["api/**/*.ts"],
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     languageOptions: {
@@ -48,6 +41,7 @@ export default tseslint.config(
     rules: {
       "@typescript-eslint/no-explicit-any": "off",
       "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_" }],
+      "no-console": "off",
     },
   },
   prettierConfig

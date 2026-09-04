@@ -5,7 +5,10 @@ interface FilterPanelProps {
   onChange: (filters: SearchFilters) => void;
 }
 
-const DOCUMENT_TYPES: { value: DocumentType; label: string }[] = [
+const DOCUMENT_TYPES: {
+  value: DocumentType;
+  label: string;
+}[] = [
   { value: "article", label: "Artigo" },
   { value: "book", label: "Livro" },
   { value: "thesis", label: "Tese/dissertação" },
@@ -16,7 +19,6 @@ export function FilterPanel({ filters, onChange }: FilterPanelProps) {
   function updateFilter<K extends keyof SearchFilters>(key: K, value: SearchFilters[K]) {
     onChange({ ...filters, [key]: value });
   }
-
   return (
     <aside className="w-full lg:w-56 shrink-0">
       <div className="lg:sticky lg:top-6 space-y-6">

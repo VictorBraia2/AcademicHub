@@ -8,13 +8,11 @@ interface SearchBarProps {
 
 export function SearchBar({ initialValue = "", onSearch, loading }: SearchBarProps) {
   const [searchInputValue, setSearchInputValue] = useState(initialValue);
-
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
     const trimmedQuery = searchInputValue.trim();
     if (trimmedQuery) onSearch(trimmedQuery);
   }
-
   return (
     <div className="bg-drawer -mx-6 px-6 py-10 sm:py-14 mb-8">
       <div className="max-w-3xl mx-auto text-center">

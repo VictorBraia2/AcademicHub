@@ -34,16 +34,12 @@ export function ResultCard({
 }: ResultCardProps) {
   const authorLine =
     academicSource.authors.length > 0
-      ? // 4 é um número arbitrário — parecia razoável pra não estourar a
-        // altura do card em telas estreitas. Ajustar se ficar estranho.
-        academicSource.authors
+      ? academicSource.authors
           .slice(0, 4)
           .map((sourceAuthor) => sourceAuthor.name)
           .join("; ") + (academicSource.authors.length > 4 ? " et al." : "")
       : "Autoria não identificada";
-
   const venueLine = [academicSource.venue, academicSource.year].filter(Boolean).join(", ");
-
   return (
     <article className="catalog-card p-5">
       <div className="flex items-start justify-between gap-4 mb-1">

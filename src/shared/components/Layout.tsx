@@ -10,7 +10,6 @@ interface LayoutProps {
 
 export function Layout({ children, user, onSignOut }: LayoutProps) {
   const location = useLocation();
-
   return (
     <div className="min-h-screen flex flex-col">
       <header className="bg-drawer text-card">

@@ -15,9 +15,7 @@ export function CitationExporter({ source: academicSource }: CitationExporterPro
   const [citationFormat, setCitationFormat] = useState<CitationFormat>("abnt");
   const [isCopied, setIsCopied] = useState(false);
   const [copyFailed, setCopyFailed] = useState(false);
-
   const citationText = formatCitation(academicSource, citationFormat);
-
   async function copyCitationToClipboard() {
     const succeeded = await copyText(citationText);
     if (succeeded) {
@@ -25,12 +23,9 @@ export function CitationExporter({ source: academicSource }: CitationExporterPro
       setIsCopied(true);
       setTimeout(() => setIsCopied(false), 1800);
     } else {
-      // Sem clipboard e sem fallback funcionando (raro, mas acontece em
-      // iframes sandboxed) — avisa em vez de fingir que copiou.
       setCopyFailed(true);
     }
   }
-
   return (
     <div className="relative">
       <button onClick={() => setIsOpen((prevIsOpen) => !prevIsOpen)} className="btn-secondary text-xs">
@@ -59,9 +54,7 @@ export function CitationExporter({ source: academicSource }: CitationExporterPro
             readOnly
             value={citationText}
             rows={citationFormat === "bibtex" ? 7 : 4}
-            className={`w-full text-xs p-2 border border-rule bg-paper text-ink resize-none rounded-card ${
-              citationFormat === "bibtex" ? "font-mono" : "font-body"
-            }`}
+            className={`w-full text-xs p-2 border border-rule bg-paper text-ink resize-none rounded-card ${citationFormat === "bibtex" ? "font-mono" : "font-body"}`}
           />
 
           <button onClick={copyCitationToClipboard} className="btn-primary text-xs mt-2 w-full">

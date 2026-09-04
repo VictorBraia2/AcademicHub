@@ -1,12 +1,7 @@
--- AcademicHub — Row-Level Security
--- Cada usuário só enxerga e altera os próprios registros. Sem isso, a chave
--- anon do Supabase exposta no frontend permitiria ler dados de qualquer pessoa.
-
 alter table public.collections enable row level security;
 alter table public.saved_sources enable row level security;
 alter table public.recent_searches enable row level security;
 
--- collections ----------------------------------------------------------
 create policy "collections_select_own"
   on public.collections for select
   using (auth.uid() = user_id);
@@ -24,7 +19,6 @@ create policy "collections_delete_own"
   on public.collections for delete
   using (auth.uid() = user_id);
 
--- saved_sources ----------------------------------------------------------
 create policy "saved_sources_select_own"
   on public.saved_sources for select
   using (auth.uid() = user_id);
@@ -42,7 +36,6 @@ create policy "saved_sources_delete_own"
   on public.saved_sources for delete
   using (auth.uid() = user_id);
 
--- recent_searches ----------------------------------------------------------
 create policy "recent_searches_select_own"
   on public.recent_searches for select
   using (auth.uid() = user_id);

@@ -8,7 +8,6 @@ interface NoteEditorProps {
 export function NoteEditor({ initialNotes, onSave }: NoteEditorProps) {
   const [notesValue, setNotesValue] = useState(initialNotes);
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved">("idle");
-
   async function handleBlur() {
     if (notesValue === initialNotes) return;
     setSaveStatus("saving");
@@ -16,7 +15,6 @@ export function NoteEditor({ initialNotes, onSave }: NoteEditorProps) {
     setSaveStatus("saved");
     setTimeout(() => setSaveStatus("idle"), 1500);
   }
-
   return (
     <div>
       <textarea

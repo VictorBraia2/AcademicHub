@@ -1,13 +1,10 @@
 export type DocumentType = "article" | "book" | "thesis" | "chapter" | "other";
-
 export type AccessStatus = "open" | "paywalled" | "unknown";
-
 export interface SourceAuthor {
   name: string;
 }
 
 export interface AcademicSource {
-  /** Identificador estável, gerado a partir do DOI ou da fonte de origem */
   id: string;
   title: string;
   authors: SourceAuthor[];
@@ -18,16 +15,12 @@ export interface AcademicSource {
   doi: string | null;
   citationCount: number | null;
   language: string | null;
-  /** De onde os metadados vieram (para transparência e depuração) */
   sourceProvider: "openalex" | "crossref" | "semantic_scholar" | "google_books" | "doaj";
   access: {
     status: AccessStatus;
-    /** Link direto para PDF legal e gratuito, quando existe */
     openAccessPdfUrl: string | null;
-    /** Link de compra ou acesso na editora/loja, quando a fonte é paga */
     purchaseUrl: string | null;
   };
-  /** PDF aberto → DOI → link de compra/leitura → busca no Google Scholar */
   primaryUrl: string;
 }
 

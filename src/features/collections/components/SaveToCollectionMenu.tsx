@@ -20,7 +20,6 @@ export function SaveToCollectionMenu({
   const [isSaved, setIsSaved] = useState(false);
   const [isCreatingCollection, setIsCreatingCollection] = useState(false);
   const [newCollectionName, setNewCollectionName] = useState("");
-
   function handleToggle() {
     if (!isAuthenticated) {
       onRequireLogin();
@@ -28,14 +27,12 @@ export function SaveToCollectionMenu({
     }
     setIsOpen((prevIsOpen) => !prevIsOpen);
   }
-
   async function handleSave(collectionId: string) {
     await onSave(collectionId);
     setIsSaved(true);
     setIsOpen(false);
     setTimeout(() => setIsSaved(false), 1800);
   }
-
   async function handleCreateAndSave() {
     const trimmedName = newCollectionName.trim();
     if (!trimmedName) return;
@@ -46,7 +43,6 @@ export function SaveToCollectionMenu({
     setIsOpen(false);
     setTimeout(() => setIsSaved(false), 1800);
   }
-
   return (
     <div className="relative">
       <button onClick={handleToggle} className="btn-secondary text-xs">

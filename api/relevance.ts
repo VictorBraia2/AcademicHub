@@ -1,16 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import type { RelevanceRequest, RelevanceResponse } from "../src/features/search/types";
-import { logger } from "../src/shared/utils/logger";
-
-// Gerado sob demanda — apenas quando o usuário clica em "Por que isso é
-// relevante" para UM item específico, nunca em lote para a listagem inteira.
-// Isso mantém latência e custo de API previsíveis.
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY ?? "";
-// Haiku 4.5 deu conta bem nos testes que fiz (justificativa de 2-3 frases
-// não precisa do raciocínio mais pesado do Sonnet). Se a qualidade cair
-// muito reclamada, trocar por "claude-sonnet-5" aqui é a única mudança
-// necessária — o resto do handler não depende do modelo específico.
 const RELEVANCE_MODEL = "claude-haiku-4-5-20251001";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -22,14 +13,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     res.status(500).json({ error: "ANTHROPIC_API_KEY não configurada no servidor." });
     return;
   }
-
   const relevanceRequest = req.body as RelevanceRequest;
   if (!relevanceRequest?.query || !relevanceRequest?.title) {
     res.status(400).json({ error: "Campos 'query' e 'title' são obrigatórios." });
     return;
   }
   const abstractSnippet = (relevanceRequest.abstract ?? "").slice(0, 1600);
-
   const relevancePrompt = [
     `Termo de pesquisa do usuário: "${relevanceRequest.query}"`,
     `Título da fonte: "${relevanceRequest.title}"`,
@@ -42,7 +31,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     "o que a fonte realmente aborda — não genérico. Se o resumo não permitir avaliar",
     "com confiança, diga isso explicitamente em vez de especular.",
   ].join("\n");
-
   try {
     const anthropicResponse = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -57,10 +45,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         messages: [{ role: "user", content: relevancePrompt }],
       }),
     });
-
     if (!anthropicResponse.ok) {
       const errorBody = await anthropicResponse.text().catch(() => "");
-      logger.warn("Anthropic API recusou a chamada de relevância", {
+      console.warn("Anthropic API recusou a chamada de relevância", {
         status: anthropicResponse.status,
         title: relevanceRequest.title,
       });
@@ -73,7 +60,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .json({ error: `Falha ao consultar o modelo (${anthropicResponse.status}): ${errorBody}` });
       return;
     }
-
     const anthropicPayload = await anthropicResponse.json();
     const explanation: string =
       anthropicPayload.content
@@ -81,17 +67,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .map((contentBlock: any) => contentBlock.text)
         .join("\n")
         .trim() ?? "";
-
     if (!explanation) {
       res.status(502).json({ error: "Resposta do modelo veio vazia." });
       return;
     }
-
     const relevanceResponse: RelevanceResponse = { explanation };
     res.setHeader("Cache-Control", "s-maxage=3600, stale-while-revalidate=86400");
     res.status(200).json(relevanceResponse);
   } catch (err) {
-    logger.error("Falha inesperada ao gerar justificativa de relevância", {
+    console.error("Falha inesperada ao gerar justificativa de relevância", {
       title: relevanceRequest.title,
       error: err instanceof Error ? err.message : String(err),
     });

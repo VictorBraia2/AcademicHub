@@ -35,18 +35,15 @@ export function useSearch() {
   const [searchError, setSearchError] = useState<string | null>(null);
   const [hasSearched, setHasSearched] = useState(false);
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
-
   async function runSearch(nextFilters: SearchFilters) {
     const terms = splitTerms(nextFilters.query);
     setFilters(nextFilters);
     setHasSearched(true);
     setVisibleCount(PAGE_SIZE);
-
     if (terms.length === 0) {
       setSearchError(`Digite pelo menos ${MIN_QUERY_LENGTH} caracteres para buscar.`);
       return;
     }
-
     setIsSearching(true);
     setSearchError(null);
     try {
@@ -69,10 +66,8 @@ export function useSearch() {
       setIsSearching(false);
     }
   }
-
   const visibleResults = searchQueryResponse?.results.slice(0, visibleCount) ?? [];
   const hasMore = (searchQueryResponse?.results.length ?? 0) > visibleCount;
-
   return {
     filters,
     searchQueryResponse,

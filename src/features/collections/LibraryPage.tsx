@@ -12,17 +12,14 @@ interface LibraryPageProps {
 export function LibraryPage({ user }: LibraryPageProps) {
   const { collections, createCollection, deleteCollection } = useCollections(user?.id);
   const [activeCollectionId, setActiveCollectionId] = useState<string | null>(null);
-
   useEffect(() => {
     if (!activeCollectionId && collections.length > 0) setActiveCollectionId(collections[0].id);
   }, [collections, activeCollectionId]);
-
   const {
     sources: savedSources,
     updateNotes,
     removeSource,
   } = useSavedSources(activeCollectionId ?? undefined);
-
   if (!user) {
     return (
       <div className="max-w-prose">
@@ -33,9 +30,7 @@ export function LibraryPage({ user }: LibraryPageProps) {
       </div>
     );
   }
-
   const activeCollection = collections.find((collection) => collection.id === activeCollectionId);
-
   return (
     <div className="flex flex-col lg:flex-row gap-8">
       <CollectionSidebar

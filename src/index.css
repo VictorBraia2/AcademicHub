@@ -2,19 +2,6 @@
 @tailwind components;
 @tailwind utilities;
 
-/*
-  Linguagem visual do AcademicHub: catálogo de fichas de biblioteca.
-  — Fundo "papel", cartões como fichas de catálogo com régua fina (não sombra).
-  — Verde-biblioteca como cor de ação primária; latão para "salvo"; vermelho-carimbo
-    reservado exclusivamente para o selo de Acesso Aberto (como um carimbo de tinta).
-  — Sem badges pill, sem eyebrows em caixa alta, sem separadores de ponto médio.
-
-  TODO: não tem dark mode. A paleta de "papel" não converte bem 1:1 pra
-  escuro (o carimbo vermelho principalmente fica ruim em fundo escuro sem
-  ajustar a saturação) — se pedirem, é melhor desenhar a versão escura do
-  zero do que só inverter os tokens abaixo.
-*/
-
 @layer base {
   ::selection {
     background: #2f4a3c;
@@ -44,7 +31,6 @@
 }
 
 @layer components {
-  /* Ficha de resultado — como um cartão de catálogo físico */
   .catalog-card {
     @apply bg-card border border-rule;
     border-radius: 2px;
@@ -52,7 +38,6 @@
   }
 
   .catalog-card::before {
-    /* furo de reforço do cartão de catálogo, sutil, canto superior esquerdo */
     content: "";
     position: absolute;
     top: 14px;
@@ -64,7 +49,6 @@
     box-shadow: inset 0 0 0 1px theme("colors.rule");
   }
 
-  /* Selo de acesso aberto — evoca um carimbo de tinta de biblioteca */
   .oa-stamp {
     @apply font-display text-stamp;
     display: inline-flex;
@@ -79,7 +63,6 @@
     letter-spacing: 0.02em;
   }
 
-  /* Etiqueta de compra — como uma etiqueta de latão presa ao verso do livro */
   .purchase-tag {
     @apply font-body text-brass;
     display: inline-flex;
@@ -89,7 +72,6 @@
     border-bottom: 1px dashed theme("colors.brass");
   }
 
-  /* Guia de aba de gaveta, usada na navegação lateral de filtros/coleções */
   .drawer-tab {
     @apply font-body text-sm;
     border-left: 2px solid transparent;
@@ -135,7 +117,6 @@
     border-color: theme("colors.library.DEFAULT");
   }
 
-  /* Painel de relevância, expansível — anotação de margem */
   .margin-note {
     border-left: 2px solid theme("colors.brass");
     padding-left: 0.85rem;

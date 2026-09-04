@@ -29,7 +29,6 @@ function mapRowToSavedSource(savedSourceRow: any): SavedSource {
 export function useCollections(userId: string | undefined) {
   const [collections, setCollections] = useState<Collection[]>([]);
   const [loading, setLoading] = useState(true);
-
   const refresh = useCallback(async () => {
     if (!userId) {
       setCollections([]);
@@ -41,26 +40,20 @@ export function useCollections(userId: string | undefined) {
       .from("collections")
       .select("*")
       .order("created_at", { ascending: false });
-
     if (fetchError) {
-      // Antes isso só falhava calado (a lista de coleções ficava vazia sem
-      // nenhuma pista do porquê). Pelo menos loga com o userId agora.
       logger.error("Falha ao carregar coleções do Supabase", { userId, error: fetchError.message });
     } else if (collectionRows) {
       setCollections(collectionRows.map(mapRowToCollection));
     }
     setLoading(false);
   }, [userId]);
-
   useEffect(() => {
     refresh();
   }, [refresh]);
-
   async function createCollection(name: string, project?: string) {
     if (!userId) throw new Error("Usuário não autenticado.");
     const trimmedName = name.trim();
     if (!trimmedName) throw new Error("Nome da coleção não pode ficar em branco.");
-
     const { data: insertedRow, error: insertError } = await supabase
       .from("collections")
       .insert({ user_id: userId, name: trimmedName, project: project?.trim() || null })
@@ -74,7 +67,6 @@ export function useCollections(userId: string | undefined) {
     setCollections((previousCollections) => [newCollection, ...previousCollections]);
     return newCollection;
   }
-
   async function deleteCollection(collectionId: string) {
     const { error: deleteError } = await supabase.from("collections").delete().eq("id", collectionId);
     if (deleteError) {
@@ -85,14 +77,12 @@ export function useCollections(userId: string | undefined) {
       previousCollections.filter((collection) => collection.id !== collectionId)
     );
   }
-
   return { collections, loading, createCollection, deleteCollection, refresh };
 }
 
 export function useSavedSources(collectionId: string | undefined) {
   const [sources, setSources] = useState<SavedSource[]>([]);
   const [loading, setLoading] = useState(true);
-
   const refresh = useCallback(async () => {
     if (!collectionId) {
       setSources([]);
@@ -105,7 +95,6 @@ export function useSavedSources(collectionId: string | undefined) {
       .select("*")
       .eq("collection_id", collectionId)
       .order("created_at", { ascending: false });
-
     if (fetchError) {
       logger.error("Falha ao carregar fontes salvas", { collectionId, error: fetchError.message });
     } else if (savedSourceRows) {
@@ -113,11 +102,9 @@ export function useSavedSources(collectionId: string | undefined) {
     }
     setLoading(false);
   }, [collectionId]);
-
   useEffect(() => {
     refresh();
   }, [refresh]);
-
   async function saveSource(userId: string, targetCollectionId: string, academicSource: AcademicSource) {
     const { data: insertedRow, error: insertError } = await supabase
       .from("saved_sources")
@@ -137,7 +124,6 @@ export function useSavedSources(collectionId: string | undefined) {
     setSources((previousSources) => [newSavedSource, ...previousSources]);
     return newSavedSource;
   }
-
   async function updateNotes(savedSourceId: string, notes: string) {
     const { error: updateError } = await supabase
       .from("saved_sources")
@@ -153,7 +139,6 @@ export function useSavedSources(collectionId: string | undefined) {
       )
     );
   }
-
   async function removeSource(savedSourceId: string) {
     const { error: deleteError } = await supabase.from("saved_sources").delete().eq("id", savedSourceId);
     if (deleteError) {
@@ -164,6 +149,5 @@ export function useSavedSources(collectionId: string | undefined) {
       previousSources.filter((savedSource) => savedSource.id !== savedSourceId)
     );
   }
-
   return { sources, loading, saveSource, updateNotes, removeSource, refresh };
 }

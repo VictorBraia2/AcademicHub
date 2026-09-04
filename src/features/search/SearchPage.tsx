@@ -25,25 +25,17 @@ export function SearchPage({ user }: SearchPageProps) {
     search,
     updateFilters,
   } = useSearch();
-
   const { collections, createCollection } = useCollections(user?.id);
-  // Meio gambiarra: só quero a função saveSource daqui, não a lista de fontes
-  // de uma coleção específica (por isso o hook recebe `undefined`). Se isso
-  // incomodar de novo, vale separar saveSource num hook próprio sem o
-  // "carona" da lista — por ora não valeu a pena o refactor.
   const { saveSource } = useSavedSources(undefined);
-
   async function handleSave(academicSource: AcademicSource, collectionId: string) {
     if (!user) return;
     await saveSource(user.id, collectionId, academicSource);
   }
-
   async function handleCreateAndSave(academicSource: AcademicSource, collectionName: string) {
     if (!user) return;
     const newCollection = await createCollection(collectionName);
     await saveSource(user.id, newCollection.id, academicSource);
   }
-
   return (
     <div>
       <SearchBar initialValue={filters.query} onSearch={search} loading={isSearching} />

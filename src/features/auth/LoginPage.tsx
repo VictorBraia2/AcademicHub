@@ -6,7 +6,6 @@ export function LoginPage() {
   const [email, setEmail] = useState("");
   const [magicLinkStatus, setMagicLinkStatus] = useState<"idle" | "sending" | "sent" | "error">("idle");
   const [magicLinkError, setMagicLinkError] = useState<string | null>(null);
-
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setMagicLinkStatus("sending");
@@ -19,7 +18,6 @@ export function LoginPage() {
       setMagicLinkStatus("error");
     }
   }
-
   return (
     <div className="max-w-sm mx-auto py-10">
       <h2 className="font-display text-2xl mb-2 text-center">Entrar no AcademicHub</h2>

@@ -5,15 +5,13 @@ import type {
   SearchFilters,
   SearchResponse,
 } from "../src/features/search/types";
-import { logger } from "../src/shared/utils/logger";
 
 const OPENALEX_API_KEY = process.env.OPENALEX_API_KEY ?? "";
 const CONTACT_EMAIL = process.env.ACADEMICHUB_CONTACT_EMAIL ?? "";
 const SEMANTIC_SCHOLAR_API_KEY = process.env.SEMANTIC_SCHOLAR_API_KEY ?? "";
 const GOOGLE_BOOKS_API_KEY = process.env.GOOGLE_BOOKS_API_KEY ?? "";
-
-const FETCH_TIMEOUT_MS = 4500;
-const UNPAYWALL_TIMEOUT_MS = 2000;
+const FETCH_TIMEOUT_MS = 6000;
+const UNPAYWALL_TIMEOUT_MS = 3500;
 
 async function fetchWithTimeout(
   url: string,
@@ -58,7 +56,7 @@ const LANGUAGE_ALIASES: Record<string, string> = {
 
 function normalizeLanguageCode(raw: string | null | undefined): string | null {
   if (!raw) return null;
-  const cleaned = String(raw).trim().toLowerCase().split(/[-_]/)[0];
+  const cleaned = raw.trim().toLowerCase().split(/[-_]/)[0];
   return LANGUAGE_ALIASES[cleaned] ?? (cleaned.length === 2 ? cleaned : null);
 }
 
@@ -76,7 +74,7 @@ function describeProviderFailure(providerLabel: string, status: number): string 
 }
 
 function guessDocumentType(rawType: string | undefined | null): DocumentType {
-  const normalizedType = String(rawType ?? "").toLowerCase();
+  const normalizedType = (rawType ?? "").toLowerCase();
   if (normalizedType.includes("book") && !normalizedType.includes("chapter")) return "book";
   if (normalizedType.includes("chapter")) return "chapter";
   if (normalizedType.includes("thesis") || normalizedType.includes("dissertation")) return "thesis";
@@ -90,36 +88,27 @@ function guessDocumentType(rawType: string | undefined | null): DocumentType {
 }
 
 function reconstructAbstract(invertedIndex: Record<string, number[]> | undefined): string | null {
-  if (!invertedIndex || typeof invertedIndex !== "object") return null;
-  try {
-    const wordPositions: [number, string][] = [];
-    for (const [word, positions] of Object.entries(invertedIndex)) {
-      if (Array.isArray(positions)) {
-        for (const position of positions) wordPositions.push([position, word]);
-      }
-    }
-    wordPositions.sort((positionA, positionB) => positionA[0] - positionB[0]);
-    const reconstructedText = wordPositions.map(([, word]) => word).join(" ");
-    return reconstructedText.length > 0 ? reconstructedText : null;
-  } catch {
-    return null;
+  if (!invertedIndex) return null;
+  const wordPositions: [number, string][] = [];
+  for (const [word, positions] of Object.entries(invertedIndex)) {
+    for (const position of positions) wordPositions.push([position, word]);
   }
+  wordPositions.sort((positionA, positionB) => positionA[0] - positionB[0]);
+  const reconstructedText = wordPositions.map(([, word]) => word).join(" ");
+  return reconstructedText.length > 0 ? reconstructedText : null;
 }
 
 async function fetchOpenAlexWorks(filters: SearchFilters, extraFilterParts: string[]): Promise<any[]> {
   const openAlexParams = new URLSearchParams();
   openAlexParams.set("search", filters.query);
-  openAlexParams.set("per_page", "50");
+  openAlexParams.set("per_page", "100");
   if (OPENALEX_API_KEY) openAlexParams.set("api_key", OPENALEX_API_KEY);
   if (CONTACT_EMAIL) openAlexParams.set("mailto", CONTACT_EMAIL);
-
   const dateFilterParts: string[] = [];
   if (filters.yearFrom) dateFilterParts.push(`from_publication_date:${filters.yearFrom}-01-01`);
   if (filters.yearTo) dateFilterParts.push(`to_publication_date:${filters.yearTo}-12-31`);
-
   const allFilterParts = [...dateFilterParts, ...extraFilterParts];
   if (allFilterParts.length) openAlexParams.set("filter", allFilterParts.join(","));
-
   const openAlexResponse = await fetchWithTimeout(
     `https://api.openalex.org/works?${openAlexParams.toString()}`
   );
@@ -129,28 +118,29 @@ async function fetchOpenAlexWorks(filters: SearchFilters, extraFilterParts: stri
 }
 
 function mapOpenAlexWork(openAlexWork: any): AcademicSource {
-  const doi = normalizeDoi(openAlexWork?.doi);
+  const doi = normalizeDoi(openAlexWork.doi);
   const openAccessPdfUrl: string | null =
-    openAlexWork?.open_access?.oa_url ??
-    openAlexWork?.best_oa_location?.pdf_url ??
-    openAlexWork?.primary_location?.pdf_url ??
+    openAlexWork.open_access?.oa_url ??
+    openAlexWork.best_oa_location?.pdf_url ??
+    openAlexWork.primary_location?.pdf_url ??
     null;
   return {
-    id: doi ? `doi:${doi}` : `openalex:${openAlexWork?.id ?? Math.random()}`,
-    title: openAlexWork?.title ?? openAlexWork?.display_name ?? "Sem título",
-    authors: (openAlexWork?.authorships ?? []).map((authorship: any) => ({
-      name: authorship?.author?.display_name ?? "Autor desconhecido",
+    id: doi ? `doi:${doi}` : `openalex:${openAlexWork.id}`,
+    title: openAlexWork.title ?? openAlexWork.display_name ?? "Sem título",
+    authors: (openAlexWork.authorships ?? []).map((authorship: any) => ({
+      name: authorship.author?.display_name ?? "Autor desconhecido",
     })),
-    year: openAlexWork?.publication_year ?? null,
-    venue: openAlexWork?.primary_location?.source?.display_name ?? openAlexWork?.host_venue?.display_name ?? null,
-    documentType: guessDocumentType(openAlexWork?.type),
-    abstract: reconstructAbstract(openAlexWork?.abstract_inverted_index),
+    year: openAlexWork.publication_year ?? null,
+    venue:
+      openAlexWork.primary_location?.source?.display_name ?? openAlexWork.host_venue?.display_name ?? null,
+    documentType: guessDocumentType(openAlexWork.type),
+    abstract: reconstructAbstract(openAlexWork.abstract_inverted_index),
     doi,
-    citationCount: openAlexWork?.cited_by_count ?? null,
-    language: normalizeLanguageCode(openAlexWork?.language),
+    citationCount: openAlexWork.cited_by_count ?? null,
+    language: normalizeLanguageCode(openAlexWork.language),
     sourceProvider: "openalex",
     access: {
-      status: openAlexWork?.open_access?.is_oa ? "open" : openAccessPdfUrl ? "open" : "unknown",
+      status: openAlexWork.open_access?.is_oa ? "open" : openAccessPdfUrl ? "open" : "unknown",
       openAccessPdfUrl,
       purchaseUrl: null,
     },
@@ -163,23 +153,24 @@ async function searchOpenAlex(filters: SearchFilters): Promise<AcademicSource[]>
     fetchOpenAlexWorks(filters, []),
     fetchOpenAlexWorks(filters, ["authorships.countries:BR"]),
   ]);
-
   if (generalResult.status === "rejected" && brazilianResult.status === "rejected") {
     throw generalResult.reason;
   }
-
   const generalWorks = generalResult.status === "fulfilled" ? generalResult.value : [];
   const brazilianWorks = brazilianResult.status === "fulfilled" ? brazilianResult.value : [];
-
+  if (brazilianResult.status === "rejected") {
+    console.warn("Busca OpenAlex específica de afiliação brasileira falhou; seguindo só com a geral", {
+      error: brazilianResult.reason?.message ?? String(brazilianResult.reason),
+    });
+  }
   return [...generalWorks, ...brazilianWorks].map(mapOpenAlexWork);
 }
 
 async function searchCrossref(filters: SearchFilters): Promise<AcademicSource[]> {
   const crossrefParams = new URLSearchParams();
   crossrefParams.set("query", filters.query);
-  crossrefParams.set("rows", "40");
+  crossrefParams.set("rows", "60");
   if (CONTACT_EMAIL) crossrefParams.set("mailto", CONTACT_EMAIL);
-
   const crossrefResponse = await fetchWithTimeout(
     `https://api.crossref.org/works?${crossrefParams.toString()}`,
     {
@@ -188,30 +179,29 @@ async function searchCrossref(filters: SearchFilters): Promise<AcademicSource[]>
   );
   if (!crossrefResponse.ok) throw new Error(describeProviderFailure("Crossref", crossrefResponse.status));
   const crossrefPayload = await crossrefResponse.json();
-
   return (crossrefPayload.message?.items ?? []).map((crossrefItem: any): AcademicSource => {
-    const doi = normalizeDoi(crossrefItem?.DOI);
+    const doi = normalizeDoi(crossrefItem.DOI);
     const publicationYear =
-      crossrefItem?.published?.["date-parts"]?.[0]?.[0] ??
-      crossrefItem?.["published-print"]?.["date-parts"]?.[0]?.[0] ??
+      crossrefItem.published?.["date-parts"]?.[0]?.[0] ??
+      crossrefItem["published-print"]?.["date-parts"]?.[0]?.[0] ??
       null;
     return {
-      id: doi ? `doi:${doi}` : `crossref:${crossrefItem?.DOI ?? Math.random()}`,
-      title: Array.isArray(crossrefItem?.title) ? (crossrefItem.title[0] ?? "Sem título") : "Sem título",
-      authors: (crossrefItem?.author ?? []).map((crossrefAuthor: any) => ({
-        name: [crossrefAuthor?.given, crossrefAuthor?.family].filter(Boolean).join(" ") || "Autor desconhecido",
+      id: doi ? `doi:${doi}` : `crossref:${crossrefItem.DOI ?? Math.random()}`,
+      title: Array.isArray(crossrefItem.title) ? (crossrefItem.title[0] ?? "Sem título") : "Sem título",
+      authors: (crossrefItem.author ?? []).map((crossrefAuthor: any) => ({
+        name: [crossrefAuthor.given, crossrefAuthor.family].filter(Boolean).join(" ") || "Autor desconhecido",
       })),
       year: publicationYear,
-      venue: Array.isArray(crossrefItem?.["container-title"])
+      venue: Array.isArray(crossrefItem["container-title"])
         ? (crossrefItem["container-title"][0] ?? null)
         : null,
-      documentType: guessDocumentType(crossrefItem?.type),
-      abstract: crossrefItem?.abstract ? String(crossrefItem.abstract).replace(/<\/?jats:[^>]+>/g, "") : null,
+      documentType: guessDocumentType(crossrefItem.type),
+      abstract: crossrefItem.abstract ? String(crossrefItem.abstract).replace(/<\/?jats:[^>]+>/g, "") : null,
       doi,
-      citationCount: crossrefItem?.["is-referenced-by-count"] ?? null,
-      language: normalizeLanguageCode(crossrefItem?.language),
+      citationCount: crossrefItem["is-referenced-by-count"] ?? null,
+      language: normalizeLanguageCode(crossrefItem.language),
       sourceProvider: "crossref",
-      access: { status: "unknown", openAccessPdfUrl: null, purchaseUrl: crossrefItem?.URL ?? null },
+      access: { status: "unknown", openAccessPdfUrl: null, purchaseUrl: crossrefItem.URL ?? null },
       primaryUrl: "",
     };
   });
@@ -220,12 +210,11 @@ async function searchCrossref(filters: SearchFilters): Promise<AcademicSource[]>
 async function searchSemanticScholar(filters: SearchFilters): Promise<AcademicSource[]> {
   const semanticScholarParams = new URLSearchParams();
   semanticScholarParams.set("query", filters.query);
-  semanticScholarParams.set("limit", "40");
+  semanticScholarParams.set("limit", "100");
   semanticScholarParams.set(
     "fields",
     "title,abstract,year,authors,venue,externalIds,openAccessPdf,citationCount,publicationTypes"
   );
-
   const semanticScholarResponse = await fetchWithTimeout(
     `https://api.semanticscholar.org/graph/v1/paper/search?${semanticScholarParams.toString()}`,
     { headers: SEMANTIC_SCHOLAR_API_KEY ? { "x-api-key": SEMANTIC_SCHOLAR_API_KEY } : undefined }
@@ -233,26 +222,25 @@ async function searchSemanticScholar(filters: SearchFilters): Promise<AcademicSo
   if (!semanticScholarResponse.ok)
     throw new Error(describeProviderFailure("Semantic Scholar", semanticScholarResponse.status));
   const semanticScholarPayload = await semanticScholarResponse.json();
-
   return (semanticScholarPayload.data ?? []).map((semanticScholarPaper: any): AcademicSource => {
-    const doi = normalizeDoi(semanticScholarPaper?.externalIds?.DOI);
+    const doi = normalizeDoi(semanticScholarPaper.externalIds?.DOI);
     return {
-      id: doi ? `doi:${doi}` : `s2:${semanticScholarPaper?.paperId ?? Math.random()}`,
-      title: semanticScholarPaper?.title ?? "Sem título",
-      authors: (semanticScholarPaper?.authors ?? []).map((paperAuthor: any) => ({
-        name: paperAuthor?.name ?? "Autor desconhecido",
+      id: doi ? `doi:${doi}` : `s2:${semanticScholarPaper.paperId}`,
+      title: semanticScholarPaper.title ?? "Sem título",
+      authors: (semanticScholarPaper.authors ?? []).map((paperAuthor: any) => ({
+        name: paperAuthor.name ?? "Autor desconhecido",
       })),
-      year: semanticScholarPaper?.year ?? null,
-      venue: semanticScholarPaper?.venue || null,
-      documentType: guessDocumentType((semanticScholarPaper?.publicationTypes ?? []).join(" ")),
-      abstract: semanticScholarPaper?.abstract ?? null,
+      year: semanticScholarPaper.year ?? null,
+      venue: semanticScholarPaper.venue || null,
+      documentType: guessDocumentType((semanticScholarPaper.publicationTypes ?? []).join(" ")),
+      abstract: semanticScholarPaper.abstract ?? null,
       doi,
-      citationCount: semanticScholarPaper?.citationCount ?? null,
+      citationCount: semanticScholarPaper.citationCount ?? null,
       language: null,
       sourceProvider: "semantic_scholar",
       access: {
-        status: semanticScholarPaper?.openAccessPdf?.url ? "open" : "unknown",
-        openAccessPdfUrl: semanticScholarPaper?.openAccessPdf?.url ?? null,
+        status: semanticScholarPaper.openAccessPdf?.url ? "open" : "unknown",
+        openAccessPdfUrl: semanticScholarPaper.openAccessPdf?.url ?? null,
         purchaseUrl: null,
       },
       primaryUrl: "",
@@ -263,24 +251,22 @@ async function searchSemanticScholar(filters: SearchFilters): Promise<AcademicSo
 async function searchGoogleBooks(filters: SearchFilters): Promise<AcademicSource[]> {
   const googleBooksParams = new URLSearchParams();
   googleBooksParams.set("q", filters.query);
-  googleBooksParams.set("maxResults", "20");
+  googleBooksParams.set("maxResults", "40");
   googleBooksParams.set("country", "BR");
   if (GOOGLE_BOOKS_API_KEY) googleBooksParams.set("key", GOOGLE_BOOKS_API_KEY);
-
   const googleBooksResponse = await fetchWithTimeout(
     `https://www.googleapis.com/books/v1/volumes?${googleBooksParams.toString()}`
   );
   if (!googleBooksResponse.ok)
     throw new Error(describeProviderFailure("Google Books", googleBooksResponse.status));
   const googleBooksPayload = await googleBooksResponse.json();
-
   return (googleBooksPayload.items ?? []).map((googleBooksVolume: any): AcademicSource => {
-    const volumeInfo = googleBooksVolume?.volumeInfo ?? {};
-    const saleInfo = googleBooksVolume?.saleInfo ?? {};
-    const bookAccessInfo = googleBooksVolume?.accessInfo ?? {};
+    const volumeInfo = googleBooksVolume.volumeInfo ?? {};
+    const saleInfo = googleBooksVolume.saleInfo ?? {};
+    const bookAccessInfo = googleBooksVolume.accessInfo ?? {};
     const isFreeEbook = bookAccessInfo.epub?.isAvailable && saleInfo.saleability === "FREE";
     return {
-      id: `gbooks:${googleBooksVolume?.id ?? Math.random()}`,
+      id: `gbooks:${googleBooksVolume.id}`,
       title: volumeInfo.title ?? "Sem título",
       authors: (volumeInfo.authors ?? []).map((authorName: string) => ({ name: authorName })),
       year: volumeInfo.publishedDate ? Number(String(volumeInfo.publishedDate).slice(0, 4)) || null : null,
@@ -304,9 +290,8 @@ async function searchGoogleBooks(filters: SearchFilters): Promise<AcademicSource
 
 async function fetchDoajArticles(query: string): Promise<any[]> {
   const doajParams = new URLSearchParams();
-  doajParams.set("pageSize", "40");
+  doajParams.set("pageSize", "60");
   doajParams.set("page", "1");
-
   const doajResponse = await fetchWithTimeout(
     `https://doaj.org/api/search/articles/${encodeURIComponent(query)}?${doajParams.toString()}`
   );
@@ -316,18 +301,17 @@ async function fetchDoajArticles(query: string): Promise<any[]> {
 }
 
 function mapDoajArticle(doajArticle: any): AcademicSource {
-  const bibjson = doajArticle?.bibjson ?? {};
+  const bibjson = doajArticle.bibjson ?? {};
   const identifiers = bibjson.identifier ?? [];
-  const doiEntry = identifiers.find((identifier: any) => identifier?.type === "doi");
+  const doiEntry = identifiers.find((identifier: any) => identifier.type === "doi");
   const doi = normalizeDoi(doiEntry?.id);
   const links = bibjson.link ?? [];
-  const fulltextLink = links.find((link: any) => link?.type === "fulltext")?.url ?? links[0]?.url ?? null;
+  const fulltextLink = links.find((link: any) => link.type === "fulltext")?.url ?? links[0]?.url ?? null;
   const journalLanguages: string[] = bibjson.journal?.language ?? [];
-
   return {
-    id: doi ? `doi:${doi}` : `doaj:${doajArticle?.id ?? Math.random()}`,
+    id: doi ? `doi:${doi}` : `doaj:${doajArticle.id}`,
     title: bibjson.title ?? "Sem título",
-    authors: (bibjson.author ?? []).map((author: any) => ({ name: author?.name ?? "Autor desconhecido" })),
+    authors: (bibjson.author ?? []).map((author: any) => ({ name: author.name ?? "Autor desconhecido" })),
     year: bibjson.year ? Number(bibjson.year) || null : null,
     venue: bibjson.journal?.title ?? null,
     documentType: "article",
@@ -350,25 +334,25 @@ async function searchDoaj(filters: SearchFilters): Promise<AcademicSource[]> {
     fetchDoajArticles(filters.query),
     fetchDoajArticles(`(${filters.query}) AND bibjson.journal.country:BR`),
   ]);
-
   if (generalResult.status === "rejected" && brazilianResult.status === "rejected") {
     throw generalResult.reason;
   }
-
   const generalArticles = generalResult.status === "fulfilled" ? generalResult.value : [];
   const brazilianArticles = brazilianResult.status === "fulfilled" ? brazilianResult.value : [];
-
+  if (brazilianResult.status === "rejected") {
+    console.warn("Busca DOAJ específica de periódico brasileiro falhou; seguindo só com a geral", {
+      error: brazilianResult.reason?.message ?? String(brazilianResult.reason),
+    });
+  }
   return [...generalArticles, ...brazilianArticles].map(mapDoajArticle);
 }
 
 async function enrichWithUnpaywall(academicSources: AcademicSource[]): Promise<void> {
   const contactEmail = process.env.UNPAYWALL_EMAIL ?? CONTACT_EMAIL;
   if (!contactEmail) return;
-
   const unpaywallCandidates = academicSources
     .filter((academicSource) => academicSource.doi && academicSource.access.status === "unknown")
-    .slice(0, 10);
-
+    .slice(0, 25);
   await Promise.all(
     unpaywallCandidates.map(async (academicSource) => {
       try {
@@ -390,7 +374,11 @@ async function enrichWithUnpaywall(academicSources: AcademicSource[]): Promise<v
             academicSource.access.purchaseUrl ??
             (academicSource.doi ? `https://doi.org/${academicSource.doi}` : null);
         }
-      } catch {
+      } catch (err) {
+        console.warn("Falha ao enriquecer fonte via Unpaywall", {
+          doi: academicSource.doi,
+          error: err instanceof Error ? err.message : String(err),
+        });
       }
     })
   );
@@ -398,20 +386,15 @@ async function enrichWithUnpaywall(academicSources: AcademicSource[]): Promise<v
 
 function dedupeByDoi(academicSources: AcademicSource[]): AcademicSource[] {
   const sourcesByDedupeKey = new Map<string, AcademicSource>();
-
   for (const academicSource of academicSources) {
-    if (!academicSource || !academicSource.title) continue;
-
     const dedupeKey = academicSource.doi
       ? `doi:${academicSource.doi}`
       : `title:${academicSource.title.trim().toLowerCase().replace(/\s+/g, " ")}:${academicSource.year ?? ""}`;
-
     const existingSource = sourcesByDedupeKey.get(dedupeKey);
     if (!existingSource) {
       sourcesByDedupeKey.set(dedupeKey, academicSource);
       continue;
     }
-
     const mergedSource: AcademicSource = {
       ...existingSource,
       abstract: existingSource.abstract ?? academicSource.abstract,
@@ -429,51 +412,24 @@ function dedupeByDoi(academicSources: AcademicSource[]): AcademicSource[] {
     };
     sourcesByDedupeKey.set(dedupeKey, mergedSource);
   }
-
   return Array.from(sourcesByDedupeKey.values());
 }
 
 function applyFilters(academicSources: AcademicSource[], filters: SearchFilters): AcademicSource[] {
-  const searchKeywords = (filters.query ?? "")
-    .toLowerCase()
-    .replace(/"/g, "")
-    .split(/\s+/)
-    .filter((word) => word.length > 2);
-
   return academicSources.filter((academicSource) => {
-    if (!academicSource) return false;
-
     if (filters.yearFrom && academicSource.year && academicSource.year < filters.yearFrom) return false;
     if (filters.yearTo && academicSource.year && academicSource.year > filters.yearTo) return false;
     if (filters.documentType && academicSource.documentType !== filters.documentType) return false;
-
-    if (filters.language) {
-      const targetLang = normalizeLanguageCode(filters.language);
-      if (academicSource.language && academicSource.language !== targetLang) {
-        return false;
-      }
-    }
-
+    if (filters.language && academicSource.language !== filters.language) return false;
     if (filters.accessOnly === "open" && academicSource.access.status !== "open") return false;
-
-    if (searchKeywords.length > 1) {
-      const titleText = String(academicSource.title ?? "").toLowerCase();
-      const abstractText = String(academicSource.abstract ?? "").toLowerCase();
-      const fullText = `${titleText} ${abstractText}`;
-
-      const hasMainKeywords = searchKeywords.every((kw) => fullText.includes(kw));
-      if (!hasMainKeywords) return false;
-    }
-
     return true;
   });
 }
 
 type ProviderName = AcademicSource["sourceProvider"];
-
 const MIN_QUERY_LENGTH = 2;
 const MAX_QUERIES_PER_REQUEST = 3;
-const MAX_RESULTS = 100;
+const MAX_RESULTS = 150;
 
 function parseQueryTerms(rawQuery: string | string[] | undefined): string[] {
   const rawValues = Array.isArray(rawQuery) ? rawQuery : [rawQuery ?? ""];
@@ -492,7 +448,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       .json({ error: `Informe pelo menos um termo de busca com ${MIN_QUERY_LENGTH}+ caracteres.` });
     return;
   }
-
   const parsedYearFrom = req.query.yearFrom ? Number(req.query.yearFrom) : undefined;
   const parsedYearTo = req.query.yearTo ? Number(req.query.yearTo) : undefined;
   if (
@@ -502,7 +457,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     res.status(400).json({ error: "'yearFrom' e 'yearTo' precisam ser números." });
     return;
   }
-
   const sharedFilterInput = {
     yearFrom: parsedYearFrom,
     yearTo: parsedYearTo,
@@ -510,7 +464,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     language: (req.query.language as string) || undefined,
     accessOnly: (req.query.accessOnly as SearchFilters["accessOnly"]) || undefined,
   };
-
   try {
     const providerFactories: Array<[ProviderName, (filters: SearchFilters) => Promise<AcademicSource[]>]> = [
       ["openalex", searchOpenAlex],
@@ -519,11 +472,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       ["google_books", searchGoogleBooks],
       ["doaj", searchDoaj],
     ];
-
     const providerSuccessCount: Partial<Record<ProviderName, number>> = {};
     const providerFailureMessage: Partial<Record<ProviderName, string>> = {};
     let mergedSources: AcademicSource[] = [];
-
     await Promise.all(
       queryTerms.map(async (term) => {
         const termFilters: SearchFilters = { query: term, ...sharedFilterInput };
@@ -538,7 +489,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           } else {
             const failureMessage = termResult.reason?.message ?? "Falha desconhecida";
             providerFailureMessage[providerName] = failureMessage;
-            logger.warn("Provedor de busca acadêmica falhou", {
+            console.warn("Provedor de busca acadêmica falhou", {
               provider: providerName,
               term,
               failureMessage,
@@ -547,31 +498,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         });
       })
     );
-
     const providerErrors: SearchResponse["providerErrors"] = {};
     providerFactories.forEach(([providerName]) => {
       if (!providerSuccessCount[providerName] && providerFailureMessage[providerName]) {
         providerErrors[providerName] = providerFailureMessage[providerName];
       }
     });
-
     mergedSources = dedupeByDoi(mergedSources);
     await enrichWithUnpaywall(mergedSources);
     mergedSources = applyFilters(mergedSources, { query: queryTerms.join(" "), ...sharedFilterInput });
-
     mergedSources.sort((sourceA, sourceB) => {
       const brazilScore = (academicSource: AcademicSource) => (academicSource.language === "pt" ? 1 : 0);
       const brazilDiff = brazilScore(sourceB) - brazilScore(sourceA);
       if (brazilDiff !== 0) return brazilDiff;
-
       const accessScore = (academicSource: AcademicSource) =>
         academicSource.access.status === "open" ? 1 : 0;
       const accessDiff = accessScore(sourceB) - accessScore(sourceA);
       if (accessDiff !== 0) return accessDiff;
-
       return (sourceB.citationCount ?? 0) - (sourceA.citationCount ?? 0);
     });
-
     const searchResponse: SearchResponse = {
       results: mergedSources.slice(0, MAX_RESULTS).map((academicSource) => ({
         ...academicSource,
@@ -580,11 +525,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       totalEstimate: mergedSources.length,
       providerErrors,
     };
-
     res.setHeader("Cache-Control", "s-maxage=300, stale-while-revalidate=600");
     res.status(200).json(searchResponse);
   } catch (err) {
-    logger.error("Falha inesperada no handler de busca", {
+    console.error("Falha inesperada no handler de busca", {
       queryTerms,
       error: err instanceof Error ? err.message : String(err),
     });

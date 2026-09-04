@@ -1,6 +1,3 @@
-// Nada além de um console.* com formato consistente e contexto anexado.
-// Não vale puxar pino/winston pro tamanho desse projeto — se o volume de
-// logs crescer (ou precisarmos mandar isso pra algum lugar), revisitar.
 type LogContext = Record<string, unknown>;
 
 function write(level: "info" | "warn" | "error", message: string, context?: LogContext) {

@@ -7,12 +7,6 @@ interface RelevancePanelProps {
   source: AcademicSource;
 }
 
-// Uma justificativa já gerada não muda entre reaberturas do painel na mesma
-// sessão — evita nova chamada à Anthropic API por clique repetido.
-// TODO: esse Map nunca é limpo, então numa sessão muito longa com muita
-// busca ele cresce sem limite. Na prática seriam centenas de entradas de
-// texto curto pra isso incomodar, mas se virar problema, trocar por um
-// LRU simples com teto de ~200 entradas.
 const relevanceExplanationCache = new Map<string, string>();
 
 export function RelevancePanel({ query, source }: RelevancePanelProps) {
@@ -20,7 +14,6 @@ export function RelevancePanel({ query, source }: RelevancePanelProps) {
   const [isLoading, setIsLoading] = useState(false);
   const [explanation, setExplanation] = useState<string | null>(null);
   const [relevanceError, setRelevanceError] = useState<string | null>(null);
-
   async function handleToggle() {
     if (isOpen) {
       setIsOpen(false);
@@ -28,14 +21,12 @@ export function RelevancePanel({ query, source }: RelevancePanelProps) {
     }
     setIsOpen(true);
     if (explanation || isLoading) return;
-
     const cacheKey = `${query}::${source.title}`;
     const cachedExplanation = relevanceExplanationCache.get(cacheKey);
     if (cachedExplanation) {
       setExplanation(cachedExplanation);
       return;
     }
-
     setIsLoading(true);
     setRelevanceError(null);
     try {
@@ -51,7 +42,9 @@ export function RelevancePanel({ query, source }: RelevancePanelProps) {
         const errorBody = await httpResponse.text().catch(() => "");
         throw new Error(`Erro ${httpResponse.status}: ${errorBody || httpResponse.statusText}`);
       }
-      const { explanation: generatedExplanation } = (await httpResponse.json()) as { explanation: string };
+      const { explanation: generatedExplanation } = (await httpResponse.json()) as {
+        explanation: string;
+      };
       relevanceExplanationCache.set(cacheKey, generatedExplanation);
       setExplanation(generatedExplanation);
     } catch (err) {
@@ -65,7 +58,6 @@ export function RelevancePanel({ query, source }: RelevancePanelProps) {
       setIsLoading(false);
     }
   }
-
   return (
     <div>
       <button
