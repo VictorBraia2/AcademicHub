@@ -1,105 +1,101 @@
-import { useState, useEffect } from "react";
-import { supabase } from "@/shared/lib/supabaseClient";
+import { useState } from "react";
 import { logger } from "@/shared/utils/logger";
 import type { SearchFilters, SearchResponse } from "../types";
 
+const MIN_QUERY_LENGTH = 2;
+const MAX_TERMS = 3;
+const PAGE_SIZE = 20;
+
+// Resolve o erro TS2305 extraindo o tipo correto direto do SearchResponse
 type SearchResult = SearchResponse["results"][number];
 
-const MIN_QUERY_LENGTH = 2;
-const PAGE_SIZE = 20;
+function splitTerms(rawQuery: string): string[] {
+  return Array.from(
+    new Set(
+      rawQuery
+        .split(",")
+        .map((term) => term.trim())
+        .filter((term) => term.length >= MIN_QUERY_LENGTH)
+    )
+  ).slice(0, MAX_TERMS);
+}
+
+function buildSearchParams(filters: SearchFilters, terms: string[]): URLSearchParams {
+  const searchParams = new URLSearchParams();
+  terms.forEach((term) => searchParams.append("query", term));
+  if (filters.yearFrom) searchParams.set("yearFrom", String(filters.yearFrom));
+  if (filters.yearTo) searchParams.set("yearTo", String(filters.yearTo));
+  if (filters.documentType) searchParams.set("documentType", filters.documentType);
+  if (filters.language) searchParams.set("language", filters.language);
+  if (filters.accessOnly) searchParams.set("accessOnly", filters.accessOnly);
+  return searchParams;
+}
 
 export function useSearch() {
   const [filters, setFilters] = useState<SearchFilters>({ query: "" });
-  const [results, setResults] = useState<SearchResult[]>([]);
+  // Mantemos o searchQueryResponse para não quebrar a tela SearchPage.tsx
+  const [searchQueryResponse, setSearchQueryResponse] = useState<SearchResponse | null>(null);
   const [isSearching, setIsSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [hasSearched, setHasSearched] = useState(false);
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
 
-  useEffect(() => {
-    const rawQuery = filters.query.trim();
+  async function runSearch(nextFilters: SearchFilters) {
+    const terms = splitTerms(nextFilters.query);
+    setFilters(nextFilters);
+    setHasSearched(true);
+    setVisibleCount(PAGE_SIZE);
 
-    if (!rawQuery) {
-      setResults([]);
-      setSearchError(null);
-      return;
-    }
-
-    if (rawQuery.length < MIN_QUERY_LENGTH) {
+    if (terms.length === 0) {
       setSearchError(`Digite pelo menos ${MIN_QUERY_LENGTH} caracteres para buscar.`);
-      setResults([]);
+      setSearchQueryResponse(null);
       return;
     }
 
-    const timer = setTimeout(async () => {
-      setIsSearching(true);
-      setSearchError(null);
-      setHasSearched(true);
+    setIsSearching(true);
+    setSearchError(null);
 
-      try {
-        let queryBuilder = supabase
-          .from("publications") 
-          .select("*")
-          .ilike("title", `%${rawQuery}%`);
-
-        if (filters.yearFrom) {
-          queryBuilder = queryBuilder.gte("year", filters.yearFrom);
-        }
-        if (filters.yearTo) {
-          queryBuilder = queryBuilder.lte("year", filters.yearTo);
-        }
-        if (filters.documentType) {
-          queryBuilder = queryBuilder.eq("document_type", filters.documentType);
-        }
-        if (filters.language) {
-          queryBuilder = queryBuilder.eq("language", filters.language);
-        }
-
-        const { data, error } = await queryBuilder;
-
-        if (error) throw error;
-
-        setResults((data as unknown as SearchResult[]) || []);
-      } catch (err) {
-        const errorMessage = err instanceof Error ? err.message : "Erro ao realizar busca no banco.";
-        logger.error("Falha ao buscar publicações", {
-          filters,
-          error: errorMessage,
-        });
-        setSearchError(errorMessage);
-        setResults([]);
-      } finally {
-        setIsSearching(false);
+    try {
+      // Faz a requisição para a SUA API que busca os artigos
+      const httpResponse = await fetch(`/api/search?${buildSearchParams(nextFilters, terms).toString()}`);
+      
+      if (!httpResponse.ok) {
+        const errorBody = await httpResponse.text().catch(() => "");
+        throw new Error(
+          `Erro ${httpResponse.status} ao buscar fontes: ${errorBody || httpResponse.statusText}`
+        );
       }
-    }, 300);
+      
+      setSearchQueryResponse((await httpResponse.json()) as SearchResponse);
+    } catch (err) {
+      logger.error("Falha ao buscar fontes acadêmicas", {
+        terms,
+        filters: nextFilters,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      setSearchError(err instanceof Error ? err.message : "Não foi possível completar a busca.");
+    } finally {
+      setIsSearching(false);
+    }
+  }
 
-    return () => clearTimeout(timer);
-  }, [filters]);
-
-  const visibleResults = results.slice(0, visibleCount);
-  const hasMore = results.length > visibleCount;
-
-  const searchQueryResponse: SearchResponse | null = hasSearched
-    ? ({ results, total: results.length } as unknown as SearchResponse)
-    : null;
+  const visibleResults = searchQueryResponse?.results.slice(0, visibleCount) ?? [];
+  const hasMore = (searchQueryResponse?.results.length ?? 0) > visibleCount;
 
   return {
     filters,
-    results,
-    searchQueryResponse,
+    searchQueryResponse, 
+    results: searchQueryResponse?.results ?? [], // Retorna os results para manter compatibilidade
     visibleResults,
     hasMore,
+    loadMore: () => setVisibleCount((count) => count + PAGE_SIZE),
     isSearching,
     searchError,
     hasSearched,
-    loadMore: () => setVisibleCount((count) => count + PAGE_SIZE),
-    search: (query: string) => {
-      setVisibleCount(PAGE_SIZE);
-      setFilters((prev) => ({ ...prev, query }));
-    },
+    search: (query: string) => runSearch({ ...filters, query }),
     updateFilters: (nextFilters: SearchFilters) => {
-      setVisibleCount(PAGE_SIZE);
-      setFilters(nextFilters);
+      if (hasSearched && nextFilters.query) runSearch(nextFilters);
+      else setFilters(nextFilters);
     },
   };
 }
