@@ -9,9 +9,24 @@ import type {
 const OPENALEX_API_KEY = process.env.OPENALEX_API_KEY ?? "";
 const CONTACT_EMAIL = process.env.ACADEMICHUB_CONTACT_EMAIL ?? "";
 const SEMANTIC_SCHOLAR_API_KEY = process.env.SEMANTIC_SCHOLAR_API_KEY ?? "";
-const GOOGLE_BOOKS_API_KEY = process.env.GOOGLE_BOOKS_API_KEY ?? "";
 const FETCH_TIMEOUT_MS = 6000;
 const UNPAYWALL_TIMEOUT_MS = 3500;
+
+const PREPRINT_SERVERS = [
+  "arxiv",
+  "biorxiv",
+  "medrxiv",
+  "research square",
+  "ssrn",
+  "chemrxiv",
+  "preprints.org"
+];
+
+function isPreprint(source: AcademicSource): boolean {
+  const venue = (source.venue ?? "").toLowerCase();
+  const id = source.id.toLowerCase();
+  return PREPRINT_SERVERS.some((server) => venue.includes(server) || id.includes(server));
+}
 
 async function fetchWithTimeout(
   url: string,
@@ -147,7 +162,7 @@ async function fetchOpenAlexWorks(filters: SearchFilters, extraFilterParts: stri
   const dateFilterParts: string[] = [];
   if (filters.yearFrom) dateFilterParts.push(`from_publication_date:${filters.yearFrom}-01-01`);
   if (filters.yearTo) dateFilterParts.push(`to_publication_date:${filters.yearTo}-12-31`);
-  const allFilterParts = [...dateFilterParts, ...extraFilterParts];
+  const allFilterParts = ["type:article", ...dateFilterParts, ...extraFilterParts];
   if (allFilterParts.length) openAlexParams.set("filter", allFilterParts.join(","));
   const openAlexResponse = await fetchWithTimeout(
     `https://api.openalex.org/works?${openAlexParams.toString()}`
@@ -283,46 +298,6 @@ async function searchSemanticScholar(filters: SearchFilters): Promise<AcademicSo
   });
 }
 
-async function searchGoogleBooks(filters: SearchFilters): Promise<AcademicSource[]> {
-  const googleBooksParams = new URLSearchParams();
-  googleBooksParams.set("q", filters.query);
-  googleBooksParams.set("maxResults", "40");
-  googleBooksParams.set("gl", "BR");
-  if (GOOGLE_BOOKS_API_KEY) googleBooksParams.set("key", GOOGLE_BOOKS_API_KEY);
-  const googleBooksResponse = await fetchWithTimeout(
-    `https://www.googleapis.com/books/v1/volumes?${googleBooksParams.toString()}`
-  );
-  if (!googleBooksResponse.ok)
-    throw new Error(describeProviderFailure("Google Books", googleBooksResponse.status));
-  const googleBooksPayload = await googleBooksResponse.json();
-  return (googleBooksPayload.items ?? []).map((googleBooksVolume: any): AcademicSource => {
-    const volumeInfo = googleBooksVolume.volumeInfo ?? {};
-    const saleInfo = googleBooksVolume.saleInfo ?? {};
-    const bookAccessInfo = googleBooksVolume.accessInfo ?? {};
-    const isFreeEbook = bookAccessInfo.epub?.isAvailable && saleInfo.saleability === "FREE";
-    return {
-      id: `gbooks:${googleBooksVolume.id}`,
-      title: volumeInfo.title ?? "Sem título",
-      authors: (volumeInfo.authors ?? []).map((authorName: string) => ({ name: authorName })),
-      year: volumeInfo.publishedDate ? Number(String(volumeInfo.publishedDate).slice(0, 4)) || null : null,
-      venue: volumeInfo.publisher ?? null,
-      documentType: "book",
-      abstract: volumeInfo.description ?? null,
-      doi: null,
-      citationCount: null,
-      language: normalizeLanguageCode(volumeInfo.language),
-      sourceProvider: "google_books",
-      access: {
-        status: isFreeEbook ? "open" : saleInfo.saleability === "FOR_SALE" ? "paywalled" : "unknown",
-        openAccessPdfUrl: isFreeEbook ? (bookAccessInfo.webReaderLink ?? null) : null,
-        purchaseUrl:
-          saleInfo.saleability === "FOR_SALE" ? (saleInfo.buyLink ?? null) : (volumeInfo.infoLink ?? null),
-      },
-      primaryUrl: "",
-    };
-  });
-}
-
 async function fetchDoajArticles(query: string): Promise<any[]> {
   const doajParams = new URLSearchParams();
   doajParams.set("pageSize", "60");
@@ -447,16 +422,15 @@ function dedupeByDoi(academicSources: AcademicSource[]): AcademicSource[] {
 
 function applyFilters(academicSources: AcademicSource[], filters: SearchFilters): AcademicSource[] {
   return academicSources.filter((academicSource) => {
+
+    if (isPreprint(academicSource)) return false;
+
+    if (!academicSource.doi) return false;
+
+    if (academicSource.documentType !== "article") return false;
+
     if (filters.yearFrom && academicSource.year && academicSource.year < filters.yearFrom) return false;
     if (filters.yearTo && academicSource.year && academicSource.year > filters.yearTo) return false;
-
-    if (
-      filters.documentType &&
-      !["all", "todos", "any"].includes(filters.documentType.toLowerCase()) &&
-      academicSource.documentType !== filters.documentType
-    ) {
-      return false;
-    }
 
     if (
       filters.language &&
@@ -526,11 +500,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   };
 
   try {
+    // Provedores restritos a bases de artigos com revisão por pares
     const providerFactories: Array<[ProviderName, (filters: SearchFilters) => Promise<AcademicSource[]>]> = [
       ["openalex", searchOpenAlex],
       ["crossref", searchCrossref],
       ["semantic_scholar", searchSemanticScholar],
-      ["google_books", searchGoogleBooks],
       ["doaj", searchDoaj],
     ];
     const providerSuccessCount: Partial<Record<ProviderName, number>> = {};
@@ -572,12 +546,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     await enrichWithUnpaywall(mergedSources);
     mergedSources = applyFilters(mergedSources, { query: queryTerms.join(" "), ...sharedFilterInput });
 
-    // Descarta artigos sem nenhuma correspondência de palavras-chave
+    // Descarta resultados que não tenham palavras-chave correspondentes
     mergedSources = mergedSources.filter(
       (source) => calculateRelevanceScore(source, queryTerms) > 0
     );
 
-    // Ordena priorizando relevância temática primeiro
+  
     mergedSources.sort((sourceA, sourceB) => {
       const scoreA = calculateRelevanceScore(sourceA, queryTerms);
       const scoreB = calculateRelevanceScore(sourceB, queryTerms);
