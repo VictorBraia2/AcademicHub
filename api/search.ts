@@ -36,6 +36,46 @@ function normalizeDoi(doi: string | null | undefined): string | null {
     .replace(/^doi:/, "");
 }
 
+function normalizeText(text: string | null | undefined): string {
+  if (!text) return "";
+  return text
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\w\s]/gi, " ");
+}
+
+function calculateRelevanceScore(source: AcademicSource, queryTerms: string[]): number {
+  const titleNorm = normalizeText(source.title);
+  const abstractNorm = normalizeText(source.abstract);
+  let score = 0;
+
+  for (const rawTerm of queryTerms) {
+    const termNorm = normalizeText(rawTerm).trim();
+    if (!termNorm) continue;
+
+    const words = termNorm.split(/\s+/).filter((w) => w.length > 2);
+
+    if (titleNorm.includes(termNorm)) {
+      score += 100;
+    }
+
+    words.forEach((word) => {
+      if (titleNorm.includes(word)) score += 25;
+    });
+
+    if (abstractNorm.includes(termNorm)) {
+      score += 30;
+    }
+
+    words.forEach((word) => {
+      if (abstractNorm.includes(word)) score += 5;
+    });
+  }
+
+  return score;
+}
+
 const LANGUAGE_ALIASES: Record<string, string> = {
   pt: "pt",
   por: "pt",
@@ -532,14 +572,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     await enrichWithUnpaywall(mergedSources);
     mergedSources = applyFilters(mergedSources, { query: queryTerms.join(" "), ...sharedFilterInput });
 
+    // Descarta artigos sem nenhuma correspondência de palavras-chave
+    mergedSources = mergedSources.filter(
+      (source) => calculateRelevanceScore(source, queryTerms) > 0
+    );
+
+    // Ordena priorizando relevância temática primeiro
     mergedSources.sort((sourceA, sourceB) => {
+      const scoreA = calculateRelevanceScore(sourceA, queryTerms);
+      const scoreB = calculateRelevanceScore(sourceB, queryTerms);
+      if (scoreB !== scoreA) return scoreB - scoreA;
+
       const brazilScore = (academicSource: AcademicSource) => (academicSource.language === "pt" ? 1 : 0);
       const brazilDiff = brazilScore(sourceB) - brazilScore(sourceA);
       if (brazilDiff !== 0) return brazilDiff;
+
       const accessScore = (academicSource: AcademicSource) =>
         academicSource.access.status === "open" ? 1 : 0;
       const accessDiff = accessScore(sourceB) - accessScore(sourceA);
       if (accessDiff !== 0) return accessDiff;
+
       return (sourceB.citationCount ?? 0) - (sourceA.citationCount ?? 0);
     });
 
