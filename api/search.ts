@@ -158,11 +158,6 @@ async function searchOpenAlex(filters: SearchFilters): Promise<AcademicSource[]>
   }
   const generalWorks = generalResult.status === "fulfilled" ? generalResult.value : [];
   const brazilianWorks = brazilianResult.status === "fulfilled" ? brazilianResult.value : [];
-  if (brazilianResult.status === "rejected") {
-    console.warn("Busca OpenAlex específica de afiliação brasileira falhou; seguindo só com a geral", {
-      error: brazilianResult.reason?.message ?? String(brazilianResult.reason),
-    });
-  }
   return [...generalWorks, ...brazilianWorks].map(mapOpenAlexWork);
 }
 
@@ -252,7 +247,7 @@ async function searchGoogleBooks(filters: SearchFilters): Promise<AcademicSource
   const googleBooksParams = new URLSearchParams();
   googleBooksParams.set("q", filters.query);
   googleBooksParams.set("maxResults", "40");
-  googleBooksParams.set("country", "BR");
+  googleBooksParams.set("gl", "BR");
   if (GOOGLE_BOOKS_API_KEY) googleBooksParams.set("key", GOOGLE_BOOKS_API_KEY);
   const googleBooksResponse = await fetchWithTimeout(
     `https://www.googleapis.com/books/v1/volumes?${googleBooksParams.toString()}`
@@ -339,11 +334,6 @@ async function searchDoaj(filters: SearchFilters): Promise<AcademicSource[]> {
   }
   const generalArticles = generalResult.status === "fulfilled" ? generalResult.value : [];
   const brazilianArticles = brazilianResult.status === "fulfilled" ? brazilianResult.value : [];
-  if (brazilianResult.status === "rejected") {
-    console.warn("Busca DOAJ específica de periódico brasileiro falhou; seguindo só com a geral", {
-      error: brazilianResult.reason?.message ?? String(brazilianResult.reason),
-    });
-  }
   return [...generalArticles, ...brazilianArticles].map(mapDoajArticle);
 }
 
@@ -419,8 +409,26 @@ function applyFilters(academicSources: AcademicSource[], filters: SearchFilters)
   return academicSources.filter((academicSource) => {
     if (filters.yearFrom && academicSource.year && academicSource.year < filters.yearFrom) return false;
     if (filters.yearTo && academicSource.year && academicSource.year > filters.yearTo) return false;
-    if (filters.documentType && academicSource.documentType !== filters.documentType) return false;
-    if (filters.language && academicSource.language !== filters.language) return false;
+    
+    // Ignora o filtro se for 'all', 'todos' ou vazio
+    if (
+      filters.documentType &&
+      !["all", "todos", "any"].includes(filters.documentType.toLowerCase()) &&
+      academicSource.documentType !== filters.documentType
+    ) {
+      return false;
+    }
+
+    // Ignora o filtro se for 'all', 'qualquer' ou vazio
+    if (
+      filters.language &&
+      !["all", "todos", "qualquer", "any"].includes(filters.language.toLowerCase()) &&
+      academicSource.language &&
+      academicSource.language !== filters.language
+    ) {
+      return false;
+    }
+
     if (filters.accessOnly === "open" && academicSource.access.status !== "open") return false;
     return true;
   });
@@ -435,7 +443,8 @@ function parseQueryTerms(rawQuery: string | string[] | undefined): string[] {
   const rawValues = Array.isArray(rawQuery) ? rawQuery : [rawQuery ?? ""];
   const terms = rawValues
     .flatMap((value) => value.split(","))
-    .map((term) => term.trim())
+    // Remove aspas excedentes e limpa o texto digitado
+    .map((term) => term.trim().replace(/^["']+|["']+$|^""+|""+$/g, "").trim())
     .filter((term) => term.length >= MIN_QUERY_LENGTH);
   return Array.from(new Set(terms)).slice(0, MAX_QUERIES_PER_REQUEST);
 }
@@ -457,13 +466,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     res.status(400).json({ error: "'yearFrom' e 'yearTo' precisam ser números." });
     return;
   }
+
+  // Higieniza os valores recebidos da URL para evitar falsos bloqueios
+  const rawDocumentType = req.query.documentType as string | undefined;
+  const rawLanguage = req.query.language as string | undefined;
+  const rawAccessOnly = req.query.accessOnly as string | undefined;
+
   const sharedFilterInput = {
     yearFrom: parsedYearFrom,
     yearTo: parsedYearTo,
-    documentType: (req.query.documentType as SearchFilters["documentType"]) || undefined,
-    language: (req.query.language as string) || undefined,
-    accessOnly: (req.query.accessOnly as SearchFilters["accessOnly"]) || undefined,
+    documentType:
+      rawDocumentType && !["all", "todos", "any", ""].includes(rawDocumentType.toLowerCase())
+        ? (rawDocumentType as SearchFilters["documentType"])
+        : undefined,
+    language:
+      rawLanguage && !["all", "todos", "qualquer", "any", ""].includes(rawLanguage.toLowerCase())
+        ? normalizeLanguageCode(rawLanguage) ?? rawLanguage
+        : undefined,
+    accessOnly:
+      rawAccessOnly && rawAccessOnly.toLowerCase() === "open"
+        ? ("open" as SearchFilters["accessOnly"])
+        : undefined,
   };
+
   try {
     const providerFactories: Array<[ProviderName, (filters: SearchFilters) => Promise<AcademicSource[]>]> = [
       ["openalex", searchOpenAlex],
@@ -475,6 +500,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const providerSuccessCount: Partial<Record<ProviderName, number>> = {};
     const providerFailureMessage: Partial<Record<ProviderName, string>> = {};
     let mergedSources: AcademicSource[] = [];
+
     await Promise.all(
       queryTerms.map(async (term) => {
         const termFilters: SearchFilters = { query: term, ...sharedFilterInput };
@@ -498,15 +524,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         });
       })
     );
+
     const providerErrors: SearchResponse["providerErrors"] = {};
     providerFactories.forEach(([providerName]) => {
       if (!providerSuccessCount[providerName] && providerFailureMessage[providerName]) {
         providerErrors[providerName] = providerFailureMessage[providerName];
       }
     });
+
     mergedSources = dedupeByDoi(mergedSources);
     await enrichWithUnpaywall(mergedSources);
     mergedSources = applyFilters(mergedSources, { query: queryTerms.join(" "), ...sharedFilterInput });
+
     mergedSources.sort((sourceA, sourceB) => {
       const brazilScore = (academicSource: AcademicSource) => (academicSource.language === "pt" ? 1 : 0);
       const brazilDiff = brazilScore(sourceB) - brazilScore(sourceA);
@@ -517,6 +546,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (accessDiff !== 0) return accessDiff;
       return (sourceB.citationCount ?? 0) - (sourceA.citationCount ?? 0);
     });
+
     const searchResponse: SearchResponse = {
       results: mergedSources.slice(0, MAX_RESULTS).map((academicSource) => ({
         ...academicSource,
@@ -525,6 +555,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       totalEstimate: mergedSources.length,
       providerErrors,
     };
+
     res.setHeader("Cache-Control", "s-maxage=300, stale-while-revalidate=600");
     res.status(200).json(searchResponse);
   } catch (err) {
