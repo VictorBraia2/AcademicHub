@@ -12,7 +12,6 @@ const CONTACT_EMAIL = process.env.ACADEMICHUB_CONTACT_EMAIL ?? "";
 const SEMANTIC_SCHOLAR_API_KEY = process.env.SEMANTIC_SCHOLAR_API_KEY ?? "";
 const GOOGLE_BOOKS_API_KEY = process.env.GOOGLE_BOOKS_API_KEY ?? "";
 
-// Timeout ajustado para 4.5s para garantir resposta antes do limite de 10s da Vercel
 const FETCH_TIMEOUT_MS = 4500;
 const UNPAYWALL_TIMEOUT_MS = 2000;
 
@@ -368,7 +367,7 @@ async function enrichWithUnpaywall(academicSources: AcademicSource[]): Promise<v
 
   const unpaywallCandidates = academicSources
     .filter((academicSource) => academicSource.doi && academicSource.access.status === "unknown")
-    .slice(0, 10); // Reduzido para 10 itens para evitar exceder latência máxima
+    .slice(0, 10);
 
   await Promise.all(
     unpaywallCandidates.map(async (academicSource) => {
@@ -392,7 +391,6 @@ async function enrichWithUnpaywall(academicSources: AcademicSource[]): Promise<v
             (academicSource.doi ? `https://doi.org/${academicSource.doi}` : null);
         }
       } catch {
-        // Ignora falhas isoladas do Unpaywall para manter velocidade
       }
     })
   );
@@ -436,7 +434,6 @@ function dedupeByDoi(academicSources: AcademicSource[]): AcademicSource[] {
 }
 
 function applyFilters(academicSources: AcademicSource[], filters: SearchFilters): AcademicSource[] {
-  // Extrai palavras relevantes (maiores que 2 letras) ignorando artigos/preposições
   const searchKeywords = (filters.query ?? "")
     .toLowerCase()
     .replace(/"/g, "")
@@ -450,7 +447,6 @@ function applyFilters(academicSources: AcademicSource[], filters: SearchFilters)
     if (filters.yearTo && academicSource.year && academicSource.year > filters.yearTo) return false;
     if (filters.documentType && academicSource.documentType !== filters.documentType) return false;
 
-    // Filtro estrito de idioma
     if (filters.language) {
       const targetLang = normalizeLanguageCode(filters.language);
       if (academicSource.language && academicSource.language !== targetLang) {
@@ -460,13 +456,11 @@ function applyFilters(academicSources: AcademicSource[], filters: SearchFilters)
 
     if (filters.accessOnly === "open" && academicSource.access.status !== "open") return false;
 
-    // Filtro de Relevância: Evita que "história da moda" retorne artigos genéricos sobre "história"
     if (searchKeywords.length > 1) {
       const titleText = String(academicSource.title ?? "").toLowerCase();
       const abstractText = String(academicSource.abstract ?? "").toLowerCase();
       const fullText = `${titleText} ${abstractText}`;
 
-      // Exige que as palavras principais (ex: "história" E "moda") existam no título/abstract
       const hasMainKeywords = searchKeywords.every((kw) => fullText.includes(kw));
       if (!hasMainKeywords) return false;
     }
@@ -565,7 +559,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     await enrichWithUnpaywall(mergedSources);
     mergedSources = applyFilters(mergedSources, { query: queryTerms.join(" "), ...sharedFilterInput });
 
-    // Ordenação: Português primeiro, Acesso Aberto depois, e citações por fim
     mergedSources.sort((sourceA, sourceB) => {
       const brazilScore = (academicSource: AcademicSource) => (academicSource.language === "pt" ? 1 : 0);
       const brazilDiff = brazilScore(sourceB) - brazilScore(sourceA);
