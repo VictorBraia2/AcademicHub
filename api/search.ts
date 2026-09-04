@@ -409,8 +409,7 @@ function applyFilters(academicSources: AcademicSource[], filters: SearchFilters)
   return academicSources.filter((academicSource) => {
     if (filters.yearFrom && academicSource.year && academicSource.year < filters.yearFrom) return false;
     if (filters.yearTo && academicSource.year && academicSource.year > filters.yearTo) return false;
-    
-    // Ignora o filtro se for 'all', 'todos' ou vazio
+
     if (
       filters.documentType &&
       !["all", "todos", "any"].includes(filters.documentType.toLowerCase()) &&
@@ -419,7 +418,6 @@ function applyFilters(academicSources: AcademicSource[], filters: SearchFilters)
       return false;
     }
 
-    // Ignora o filtro se for 'all', 'qualquer' ou vazio
     if (
       filters.language &&
       !["all", "todos", "qualquer", "any"].includes(filters.language.toLowerCase()) &&
@@ -443,7 +441,6 @@ function parseQueryTerms(rawQuery: string | string[] | undefined): string[] {
   const rawValues = Array.isArray(rawQuery) ? rawQuery : [rawQuery ?? ""];
   const terms = rawValues
     .flatMap((value) => value.split(","))
-    // Remove aspas excedentes e limpa o texto digitado
     .map((term) => term.trim().replace(/^["']+|["']+$|^""+|""+$/g, "").trim())
     .filter((term) => term.length >= MIN_QUERY_LENGTH);
   return Array.from(new Set(terms)).slice(0, MAX_QUERIES_PER_REQUEST);
@@ -467,7 +464,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return;
   }
 
-  // Higieniza os valores recebidos da URL para evitar falsos bloqueios
   const rawDocumentType = req.query.documentType as string | undefined;
   const rawLanguage = req.query.language as string | undefined;
   const rawAccessOnly = req.query.accessOnly as string | undefined;
