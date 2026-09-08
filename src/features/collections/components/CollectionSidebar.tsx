@@ -33,8 +33,10 @@ export function CollectionSidebar({
   }
   return (
     <aside className="w-full lg:w-64 shrink-0">
-      <div className="lg:sticky lg:top-6">
-        <p className="text-sm font-medium text-ink mb-2">Coleções</p>
+      <div className="lg:sticky lg:top-6 bg-card border border-rule rounded-card shadow-book p-5">
+        <p className="font-display italic text-brass-dark text-sm border-b border-rule pb-3 mb-3 -mt-1">
+          Coleções
+        </p>
 
         <div className="space-y-1 mb-3">
           {collections.map((collection) => (

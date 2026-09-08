@@ -6,9 +6,6 @@ const MIN_QUERY_LENGTH = 2;
 const MAX_TERMS = 3;
 const PAGE_SIZE = 20;
 
-// Resolve o erro TS2305 extraindo o tipo correto direto do SearchResponse
-type SearchResult = SearchResponse["results"][number];
-
 function splitTerms(rawQuery: string): string[] {
   return Array.from(
     new Set(
@@ -58,14 +55,14 @@ export function useSearch() {
     try {
       // Faz a requisição para a SUA API que busca os artigos
       const httpResponse = await fetch(`/api/search?${buildSearchParams(nextFilters, terms).toString()}`);
-      
+
       if (!httpResponse.ok) {
         const errorBody = await httpResponse.text().catch(() => "");
         throw new Error(
           `Erro ${httpResponse.status} ao buscar fontes: ${errorBody || httpResponse.statusText}`
         );
       }
-      
+
       setSearchQueryResponse((await httpResponse.json()) as SearchResponse);
     } catch (err) {
       logger.error("Falha ao buscar fontes acadêmicas", {
@@ -84,7 +81,7 @@ export function useSearch() {
 
   return {
     filters,
-    searchQueryResponse, 
+    searchQueryResponse,
     results: searchQueryResponse?.results ?? [], // Retorna os results para manter compatibilidade
     visibleResults,
     hasMore,

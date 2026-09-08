@@ -22,7 +22,7 @@ export function LibraryPage({ user }: LibraryPageProps) {
   } = useSavedSources(activeCollectionId ?? undefined);
   if (!user) {
     return (
-      <div className="max-w-prose">
+      <div className="max-w-prose catalog-card p-8">
         <h2 className="font-display text-2xl mb-2">Minha biblioteca</h2>
         <p className="text-ink/60 text-sm">
           Entre com seu e-mail para salvar fontes em coleções pessoais e adicionar anotações.
@@ -54,7 +54,14 @@ export function LibraryPage({ user }: LibraryPageProps) {
 
         {activeCollection && (
           <>
-            <h2 className="font-display text-2xl mb-4">{activeCollection.name}</h2>
+            <div className="mb-5">
+              <h2 className="font-display text-2xl">{activeCollection.name}</h2>
+              <p className="ornamental-rule mt-2 max-w-[200px]">
+                <span className="font-display italic text-brass text-xs">
+                  {savedSources.length} {savedSources.length === 1 ? "fonte" : "fontes"}
+                </span>
+              </p>
+            </div>
 
             {savedSources.length === 0 && (
               <p className="text-ink/50 text-sm">
@@ -64,9 +71,9 @@ export function LibraryPage({ user }: LibraryPageProps) {
 
             <div className="space-y-4">
               {savedSources.map((savedSource) => (
-                <article key={savedSource.id} className="catalog-card p-5">
-                  <div className="flex items-start justify-between gap-4 mb-1">
-                    <h3 className="font-display text-lg leading-snug">{savedSource.source.title}</h3>
+                <article key={savedSource.id} className="catalog-card p-6">
+                  <div className="flex items-start justify-between gap-4 mb-1.5">
+                    <h3 className="font-display text-xl leading-snug">{savedSource.source.title}</h3>
                     <button
                       onClick={() => removeSource(savedSource.id)}
                       className="text-xs text-stamp/70 hover:text-stamp shrink-0"
@@ -74,19 +81,27 @@ export function LibraryPage({ user }: LibraryPageProps) {
                       remover
                     </button>
                   </div>
-                  <p className="text-sm text-ink/70 mb-3">
+                  <p className="text-sm text-ink/70 mb-1">
                     {savedSource.source.authors.map((sourceAuthor) => sourceAuthor.name).join("; ")}
-                    {savedSource.source.year ? `, ${savedSource.source.year}` : ""}
                   </p>
+                  {(savedSource.source.venue || savedSource.source.year) && (
+                    <p className="text-sm text-ink/50 mb-3.5">
+                      {savedSource.source.venue && (
+                        <span className="venue-title">{savedSource.source.venue}</span>
+                      )}
+                      {savedSource.source.venue && savedSource.source.year && ", "}
+                      {savedSource.source.year}
+                    </p>
+                  )}
 
-                  <div className="mb-3">
+                  <div className="mb-3.5">
                     <NoteEditor
                       initialNotes={savedSource.notes}
                       onSave={(notes) => updateNotes(savedSource.id, notes)}
                     />
                   </div>
 
-                  <div className="flex items-center justify-between border-t border-rule pt-3">
+                  <div className="flex items-center justify-between border-t border-rule pt-3.5">
                     {savedSource.source.access.openAccessPdfUrl ? (
                       <a
                         href={savedSource.source.access.openAccessPdfUrl}

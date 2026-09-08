@@ -20,10 +20,14 @@ export function FilterPanel({ filters, onChange }: FilterPanelProps) {
     onChange({ ...filters, [key]: value });
   }
   return (
-    <aside className="w-full lg:w-56 shrink-0">
-      <div className="lg:sticky lg:top-6 space-y-6">
+    <aside className="w-full lg:w-60 shrink-0">
+      <div className="lg:sticky lg:top-6 bg-card border border-rule rounded-card shadow-book p-5 space-y-6">
+        <p className="font-display italic text-brass-dark text-sm border-b border-rule pb-3 -mt-1">
+          Refinar busca
+        </p>
+
         <div>
-          <p className="text-sm font-medium text-ink mb-2">Ano de publicação</p>
+          <p className="text-sm font-display italic text-ink/80 mb-2.5">Ano de publicação</p>
           <div className="flex items-center gap-2">
             <input
               type="number"
@@ -44,7 +48,7 @@ export function FilterPanel({ filters, onChange }: FilterPanelProps) {
         </div>
 
         <div>
-          <p className="text-sm font-medium text-ink mb-2">Tipo de documento</p>
+          <p className="text-sm font-display italic text-ink/80 mb-2.5">Tipo de documento</p>
           <div className="space-y-1">
             <button
               onClick={() => updateFilter("documentType", undefined)}
@@ -67,7 +71,7 @@ export function FilterPanel({ filters, onChange }: FilterPanelProps) {
         </div>
 
         <div>
-          <p className="text-sm font-medium text-ink mb-2">Disponibilidade</p>
+          <p className="text-sm font-display italic text-ink/80 mb-2.5">Disponibilidade</p>
           <div className="space-y-1">
             <button
               onClick={() => updateFilter("accessOnly", undefined)}
@@ -87,7 +91,7 @@ export function FilterPanel({ filters, onChange }: FilterPanelProps) {
         </div>
 
         <div>
-          <label className="text-sm font-medium text-ink mb-2 block" htmlFor="lang-filter">
+          <label className="text-sm font-display italic text-ink/80 mb-2.5 block" htmlFor="lang-filter">
             Idioma
           </label>
           <select

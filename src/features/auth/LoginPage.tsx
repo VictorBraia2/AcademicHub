@@ -20,31 +20,36 @@ export function LoginPage() {
   }
   return (
     <div className="max-w-sm mx-auto py-10">
-      <h2 className="font-display text-2xl mb-2 text-center">Entrar no AcademicHub</h2>
-      <p className="text-sm text-ink/60 mb-6 text-center">
-        Enviamos um link de acesso para seu e-mail — sem senha para lembrar.
-      </p>
-
-      {magicLinkStatus === "sent" ? (
-        <p className="text-sm text-library-dark bg-paper border border-rule rounded-card p-4 text-center">
-          Link enviado para <strong>{email}</strong>. Verifique sua caixa de entrada.
+      <div className="catalog-card p-8">
+        <p className="ornamental-rule max-w-[140px] mx-auto mb-4">
+          <span className="font-display italic text-brass text-xs">Acesso</span>
         </p>
-      ) : (
-        <form onSubmit={handleSubmit} className="space-y-3">
-          <input
-            type="email"
-            required
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="seu.email@exemplo.com"
-            className="field-input w-full"
-          />
-          <button type="submit" disabled={magicLinkStatus === "sending"} className="btn-primary w-full">
-            {magicLinkStatus === "sending" ? "Enviando…" : "Enviar link de acesso"}
-          </button>
-          {magicLinkError && <p className="text-stamp text-sm">{magicLinkError}</p>}
-        </form>
-      )}
+        <h2 className="font-display text-2xl mb-2 text-center">Entrar no AcademicHub</h2>
+        <p className="text-sm text-ink/60 mb-6 text-center">
+          Enviamos um link de acesso para seu e-mail — sem senha para lembrar.
+        </p>
+
+        {magicLinkStatus === "sent" ? (
+          <p className="text-sm text-library-dark bg-paper border border-rule rounded-card p-4 text-center">
+            Link enviado para <strong>{email}</strong>. Verifique sua caixa de entrada.
+          </p>
+        ) : (
+          <form onSubmit={handleSubmit} className="space-y-3">
+            <input
+              type="email"
+              required
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="seu.email@exemplo.com"
+              className="field-input w-full"
+            />
+            <button type="submit" disabled={magicLinkStatus === "sending"} className="btn-primary w-full">
+              {magicLinkStatus === "sending" ? "Enviando…" : "Enviar link de acesso"}
+            </button>
+            {magicLinkError && <p className="text-stamp text-sm">{magicLinkError}</p>}
+          </form>
+        )}
+      </div>
     </div>
   );
 }

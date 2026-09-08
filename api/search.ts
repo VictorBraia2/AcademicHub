@@ -19,7 +19,7 @@ const PREPRINT_SERVERS = [
   "research square",
   "ssrn",
   "chemrxiv",
-  "preprints.org"
+  "preprints.org",
 ];
 
 function isPreprint(source: AcademicSource): boolean {
@@ -422,7 +422,6 @@ function dedupeByDoi(academicSources: AcademicSource[]): AcademicSource[] {
 
 function applyFilters(academicSources: AcademicSource[], filters: SearchFilters): AcademicSource[] {
   return academicSources.filter((academicSource) => {
-
     if (isPreprint(academicSource)) return false;
 
     if (!academicSource.doi) return false;
@@ -455,7 +454,12 @@ function parseQueryTerms(rawQuery: string | string[] | undefined): string[] {
   const rawValues = Array.isArray(rawQuery) ? rawQuery : [rawQuery ?? ""];
   const terms = rawValues
     .flatMap((value) => value.split(","))
-    .map((term) => term.trim().replace(/^["']+|["']+$|^""+|""+$/g, "").trim())
+    .map((term) =>
+      term
+        .trim()
+        .replace(/^["']+|["']+$|^""+|""+$/g, "")
+        .trim()
+    )
     .filter((term) => term.length >= MIN_QUERY_LENGTH);
   return Array.from(new Set(terms)).slice(0, MAX_QUERIES_PER_REQUEST);
 }
@@ -491,7 +495,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         : undefined,
     language:
       rawLanguage && !["all", "todos", "qualquer", "any", ""].includes(rawLanguage.toLowerCase())
-        ? normalizeLanguageCode(rawLanguage) ?? rawLanguage
+        ? (normalizeLanguageCode(rawLanguage) ?? rawLanguage)
         : undefined,
     accessOnly:
       rawAccessOnly && rawAccessOnly.toLowerCase() === "open"
@@ -547,11 +551,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     mergedSources = applyFilters(mergedSources, { query: queryTerms.join(" "), ...sharedFilterInput });
 
     // Descarta resultados que não tenham palavras-chave correspondentes
-    mergedSources = mergedSources.filter(
-      (source) => calculateRelevanceScore(source, queryTerms) > 0
-    );
+    mergedSources = mergedSources.filter((source) => calculateRelevanceScore(source, queryTerms) > 0);
 
-  
     mergedSources.sort((sourceA, sourceB) => {
       const scoreA = calculateRelevanceScore(sourceA, queryTerms);
       const scoreB = calculateRelevanceScore(sourceB, queryTerms);

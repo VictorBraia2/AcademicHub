@@ -39,11 +39,10 @@ export function ResultCard({
           .map((sourceAuthor) => sourceAuthor.name)
           .join("; ") + (academicSource.authors.length > 4 ? " et al." : "")
       : "Autoria não identificada";
-  const venueLine = [academicSource.venue, academicSource.year].filter(Boolean).join(", ");
   return (
-    <article className="catalog-card p-5">
-      <div className="flex items-start justify-between gap-4 mb-1">
-        <span className="text-xs text-ink/45 font-body">
+    <article className="catalog-card p-6">
+      <div className="flex items-start justify-between gap-4 mb-2">
+        <span className="text-xs text-ink/45 font-body uppercase tracking-wider">
           {DOCUMENT_TYPE_LABEL[academicSource.documentType]}
         </span>
         {academicSource.access.status === "open" ? (
@@ -53,7 +52,7 @@ export function ResultCard({
         ) : null}
       </div>
 
-      <h3 className="font-display text-lg leading-snug mb-1">
+      <h3 className="font-display text-xl leading-snug mb-1.5">
         <a
           href={academicSource.primaryUrl}
           target="_blank"
@@ -64,13 +63,19 @@ export function ResultCard({
         </a>
       </h3>
       <p className="text-sm text-ink/70">{authorLine}</p>
-      {venueLine && <p className="text-sm text-ink/50 mb-3">{venueLine}</p>}
-
-      {academicSource.abstract && (
-        <p className="text-sm text-ink/70 max-w-prose line-clamp-3 mb-3">{academicSource.abstract}</p>
+      {(academicSource.venue || academicSource.year) && (
+        <p className="text-sm text-ink/50 mb-3.5">
+          {academicSource.venue && <span className="venue-title">{academicSource.venue}</span>}
+          {academicSource.venue && academicSource.year && ", "}
+          {academicSource.year}
+        </p>
       )}
 
-      <div className="flex flex-wrap items-center gap-4 mb-3 text-sm">
+      {academicSource.abstract && (
+        <p className="text-sm text-ink/70 max-w-prose line-clamp-3 mb-3.5">{academicSource.abstract}</p>
+      )}
+
+      <div className="flex flex-wrap items-center gap-4 mb-3.5 text-sm">
         {academicSource.access.openAccessPdfUrl && (
           <a
             href={academicSource.access.openAccessPdfUrl}
@@ -86,7 +91,7 @@ export function ResultCard({
             href={academicSource.access.purchaseUrl}
             target="_blank"
             rel="noreferrer"
-            className="text-brass hover:opacity-80 underline decoration-rule underline-offset-4"
+            className="text-brass-dark hover:opacity-80 underline decoration-rule underline-offset-4"
           >
             Ver acesso/compra na editora
           </a>
@@ -99,7 +104,7 @@ export function ResultCard({
         {academicSource.doi && <span className="text-ink/30 font-mono text-xs">{academicSource.doi}</span>}
       </div>
 
-      <div className="flex items-center justify-between gap-3 border-t border-rule pt-3">
+      <div className="flex items-center justify-between gap-3 border-t border-rule pt-3.5">
         <RelevancePanel query={query} source={academicSource} />
         <div className="flex items-center gap-2 shrink-0">
           <CitationExporter source={academicSource} />
